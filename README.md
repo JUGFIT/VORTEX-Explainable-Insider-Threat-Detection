@@ -23,7 +23,7 @@ VORTEX directly addresses the high rates of false positives and the lack of clar
 
 ```bash
 # Clone the repository
-git clone <Your Repository URL Here>
+git clone <Repository URL >
 cd VORTEX-Explainable-Insider-Threat-Detection
 
 # Setup and activate the virtual environment
@@ -31,4 +31,5 @@ python -m venv venv
 source venv/bin/activate 
 
 # Install Python dependencies
+
 pip install -r requirements.txt
