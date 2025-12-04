@@ -2,12 +2,14 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-import joblib # Library for saving/loading the trained model (pkl format)
+import json
+import joblib
+from pathlib import Path
+from datetime import datetime
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
 
 # --- PATH CORRECTION ---
-# Ensure the script can reliably import config.py from the project root.
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.join(current_dir, '..')
@@ -15,15 +17,18 @@ try:
         sys.path.append(project_root)
 except NameError:
     pass
-# --- END PATH CORRECTION ---
 
-# Import configuration constants
-from config import (
-    PROCESSED_DATA_FILE, MODEL_FILE, ANOMALY_RATE
-)
+# Import configuration (try secure config first, fallback to basic)
+try:
+    from config_secure import settings
+    PROCESSED_DATA_FILE = str(settings.PROCESSED_DATA_FILE)
+    MODEL_FILE = str(settings.MODEL_FILE)
+    MODEL_DIR = str(settings.MODEL_DIR)
+    ANOMALY_RATE = settings.CONTAMINATION
+except ImportError:
+    from config import PROCESSED_DATA_FILE, MODEL_FILE, MODEL_DIR, ANOMALY_RATE
 
 # Define the features to be used for training the Isolation Forest model
-# These are the Z-score normalized, temporal, and binary features
 MODEL_FEATURES = [
     'sensitive_file_access',
     'external_ip_connection',
@@ -51,88 +56,100 @@ def load_and_prepare_data(filepath):
     # 1. Feature Set (X): Only include the numerical features for the model
     X = df[MODEL_FEATURES].copy()
     
-    # 2. True Labels (y): The ground truth flag for evaluation (1 for anomaly, 0 for normal)
+    # 2. True Labels (y): The ground truth flag for evaluation
     y_true = df['anomaly_flag_truth']
     
-    # Isolation Forest does not handle NaNs, fill with 0 (safe since normalization handled NaNs)
+    # Isolation Forest does not handle NaNs, fill with 0
     X = X.fillna(0)
 
     return X, y_true, df
 
 def train_isolation_forest(X):
     """
-    Trains the Isolation Forest model, which is used for unsupervised anomaly detection.
-    
-    Isolation Forest outputs a score where lower values indicate anomalies (outliers).
+    Trains the Isolation Forest model for unsupervised anomaly detection.
     """
     print("-> Training Isolation Forest Model...")
     
-    # Initialize the Isolation Forest model
-    # contamination: This parameter estimates the proportion of outliers in the data.
-    # We use the ANOMALY_RATE defined in config.py
     model = IsolationForest(
         contamination=ANOMALY_RATE,
-        random_state=42, # Set for reproducibility
-        n_estimators=100, # Number of base estimators (trees)
-        max_features=1.0, # Use all features
-        n_jobs=-1 # Use all available cores
+        random_state=42,
+        n_estimators=100,
+        max_features=1.0,
+        n_jobs=-1
     )
 
-    # Train the model on the entire dataset (unsupervised learning)
     model.fit(X)
     
     return model
 
 def evaluate_model(model, X, y_true):
     """
-    Evaluates the trained Isolation Forest model against the ground truth labels.
+    Evaluates the trained Isolation Forest model against ground truth labels.
     """
     print("-> Evaluating Model Performance...")
     
     # Isolation Forest predicts: 1 for inliers (normal), -1 for outliers (anomalies)
     y_pred_if = model.predict(X)
-
-    # Convert the IF prediction (-1, 1) to (1, 0) format for standard metrics (1=Anomaly, 0=Normal)
-    # y_pred_binary: 1 if IF predicted -1 (anomaly), 0 if IF predicted 1 (normal)
     y_pred_binary = np.where(y_pred_if == -1, 1, 0)
     
-    # --- Performance Metrics ---
-    # 1. AUC-ROC Score: Measures the model's ability to distinguish between classes.
-    # We use the raw decision function score for a continuous probability measure.
+    # Calculate metrics
     anomaly_scores = model.decision_function(X)
-    # Decision function outputs: higher score = more normal. We invert it for AUC.
     auc_score = roc_auc_score(y_true, -anomaly_scores)
     
-    # 2. Classification Report: Provides Precision, Recall, and F1-score
-    report = classification_report(y_true, y_pred_binary, target_names=['Normal (0)', 'Anomaly (1)'], output_dict=True)
+    report = classification_report(
+        y_true, 
+        y_pred_binary, 
+        target_names=['Normal (0)', 'Anomaly (1)'], 
+        output_dict=True
+    )
     
-    # 3. Confusion Matrix for visibility
     cm = confusion_matrix(y_true, y_pred_binary)
     
     print("-" * 50)
     print(f"Model AUC-ROC Score: {auc_score:.4f}")
     print("--- Classification Report ---")
-    print(classification_report(y_true, y_pred_binary, target_names=['Normal (0)', 'Anomaly (1)']))
+    print(classification_report(
+        y_true, 
+        y_pred_binary, 
+        target_names=['Normal (0)', 'Anomaly (1)']
+    ))
     print("--- Confusion Matrix (True vs Predicted) ---")
     print(f"| TN | FP | \n| FN | TP |\n{cm}")
     print("-" * 50)
     
-    # Store key metrics for documentation
+    # Store metrics for persistence
     metrics = {
-        'auc_roc': auc_score,
-        'f1_anomaly': report['Anomaly (1)']['f1-score'],
-        'precision_anomaly': report['Anomaly (1)']['precision'],
-        'recall_anomaly': report['Anomaly (1)']['recall'],
-        'confusion_matrix': cm.tolist()
+        'auc_roc': float(auc_score),
+        'f1_anomaly': float(report['Anomaly (1)']['f1-score']),
+        'precision_anomaly': float(report['Anomaly (1)']['precision']),
+        'recall_anomaly': float(report['Anomaly (1)']['recall']),
+        'total_events': int(len(y_true)),
+        'total_anomalies': int(y_true.sum()),
+        'confusion_matrix': cm.tolist(),
+        'model_last_trained': datetime.now().isoformat()
     }
+    
     return metrics, anomaly_scores
 
 def save_model(model):
     """Saves the trained model using joblib."""
-    # Ensure the models directory exists
     os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
     joblib.dump(model, MODEL_FILE)
     print(f"✅ Trained Isolation Forest model saved to: {MODEL_FILE}")
+
+def save_metrics(metrics):
+    """Saves model performance metrics to JSON file."""
+    metrics_file = Path(MODEL_FILE).parent / "model_metrics.json"
+    
+    # Ensure the directory exists
+    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        with open(metrics_file, 'w') as f:
+            json.dump(metrics, f, indent=2)
+        print(f"✅ Model metrics saved to: {metrics_file}")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not save metrics file: {e}")
 
 def model_training_pipeline():
     """Main function to execute the model training process."""
@@ -150,11 +167,17 @@ def model_training_pipeline():
     # Save the model artifact
     save_model(model)
     
-    # --- Future Use: Save Scores for SHAP/API ---
-    # We will save the anomaly scores back to the processed data file
-    df_full['anomaly_score'] = -anomaly_scores # Invert score: Higher score = Higher risk
+    # Save metrics to JSON file
+    save_metrics(metrics)
+    
+    # Save anomaly scores back to processed data
+    df_full['anomaly_score'] = -anomaly_scores
     df_full.to_csv(PROCESSED_DATA_FILE, index=False)
-    print(f"Updated processed data with anomaly scores saved to: {PROCESSED_DATA_FILE}")
+    print(f"✅ Updated processed data with anomaly scores: {PROCESSED_DATA_FILE}")
+    
+    print("\n" + "=" * 50)
+    print("🎉 MODEL TRAINING PIPELINE COMPLETED SUCCESSFULLY")
+    print("=" * 50)
 
 if __name__ == "__main__":
     model_training_pipeline()

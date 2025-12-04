@@ -1,28 +1,58 @@
+"""
+Basic Configuration for VORTEX
+For production use, prefer config_secure.py with environment variables.
+"""
+
 import os
 from datetime import time
+from pathlib import Path
 
-# --- Corrected Base Directories ---
-# ROOT_DIR is the directory containing config.py, which is the VORTEX project root.
-# os.path.abspath(__file__) resolves the path of config.py itself.
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__)) 
-DATA_DIR = os.path.join(ROOT_DIR, 'data')
-MODEL_DIR = os.path.join(ROOT_DIR, 'models')
+# --- Base Directories (Using pathlib for better cross-platform support) ---
+ROOT_DIR = Path(__file__).parent.absolute()
+DATA_DIR = ROOT_DIR / 'data'
+MODEL_DIR = ROOT_DIR / 'models'
 
-# --- Data Generation Parameters (Week 1 Focus) ---
-NUM_USERS = 50           # Number of unique users to simulate
-NUM_DAYS = 30            # Number of days of data to generate
-BASE_EVENTS_PER_DAY = 15 # Average number of normal events per user per day
-ANOMALY_RATE = 0.03      # Target percentage of events that should be anomalies (3%)
+# Ensure directories exist
+DATA_DIR.mkdir(exist_ok=True)
+MODEL_DIR.mkdir(exist_ok=True)
 
-# --- File Paths ---
-RAW_DATA_FILE = os.path.join(DATA_DIR, 'raw_behavior_logs.csv')
-PROCESSED_DATA_FILE = os.path.join(DATA_DIR, 'processed_features.csv')
-MODEL_FILE = os.path.join(MODEL_DIR, 'isolation_forest_model.pkl')
+# --- File Paths (Convert to strings for backward compatibility) ---
+RAW_DATA_FILE = str(DATA_DIR / 'raw_behavior_logs.csv')
+PROCESSED_DATA_FILE = str(DATA_DIR / 'processed_features.csv')
+MODEL_FILE = str(MODEL_DIR / 'isolation_forest_model.pkl')
 
-# --- Feature Engineering Parameters (Future Use) ---
-TIME_WINDOW_HOURS = 24  # For aggregating features (e.g., total files accessed in 24h)
+# --- Data Generation Parameters ---
+NUM_USERS = 50
+NUM_DAYS = 30
+BASE_EVENTS_PER_DAY = 15
+ANOMALY_RATE = 0.03  # 3% anomaly rate
+
+# --- Feature Engineering Parameters ---
+TIME_WINDOW_HOURS = 24
 
 # --- Normal Behavior Profile ---
-# Define a "normal" working hour window (8 AM to 6 PM IST)
 NORMAL_START_TIME = time(8, 0, 0)
 NORMAL_END_TIME = time(18, 0, 0)
+
+# --- Model Training Parameters ---
+CONTAMINATION = ANOMALY_RATE  # Alias for consistency
+N_ESTIMATORS = 100
+MAX_SAMPLES = 256
+RANDOM_STATE = 42
+
+# Export as strings for legacy compatibility
+DATA_DIR = str(DATA_DIR)
+MODEL_DIR = str(MODEL_DIR)
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("VORTEX Basic Configuration")
+    print("=" * 60)
+    print(f"Root Directory: {ROOT_DIR}")
+    print(f"Data Directory: {DATA_DIR}")
+    print(f"Model Directory: {MODEL_DIR}")
+    print(f"Raw Data File: {RAW_DATA_FILE}")
+    print(f"Processed Data File: {PROCESSED_DATA_FILE}")
+    print(f"Model File: {MODEL_FILE}")
+    print(f"Anomaly Rate: {ANOMALY_RATE:.1%}")
+    print("=" * 60)
