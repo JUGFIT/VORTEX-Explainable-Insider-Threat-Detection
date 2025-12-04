@@ -1,0 +1,17 @@
+# Data Handling & Scientific Computing
+pandas
+numpy
+
+# Machine Learning & Anomaly Detection (Isolation Forest)
+scikit-learn
+
+# Explainable AI (XAI)
+shap
+
+# Backend API & Web Server
+fastapi
+uvicorn[standard]
+
+# Data Visualization (for SHAP/internal plotting)
+matplotlib
+seaborn

@@ -1,0 +1,21 @@
+# Virtual Environment
+venv/
+.venv/
+
+# PyCharm / VS Code local directories
+.idea/
+.vscode/
+
+# Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+
+# Models and Data (Large/Sensitive files)
+models/*.pkl
+models/*.h5
+data/*.csv
+data/*.log
+
+# Environment Variables / Secrets
+.env
