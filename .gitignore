@@ -1,21 +1,34 @@
-# Virtual Environment
+# --- VORTEX FINAL IGNORE LIST ---
+
+# 1. Environment & Dependencies
+.env
 venv/
-.venv/
+env/
+ENV/
 
-# PyCharm / VS Code local directories
-.idea/
-.vscode/
-
-# Compiled Python files
+# 2. Python Artifacts
 __pycache__/
 *.pyc
-*.pyo
+*.so
 
-# Models and Data (Large/Sensitive files)
+# 3. Logs & Model Artifacts (DO NOT COMMIT)
+logs/
+*.log
 models/*.pkl
-models/*.h5
+models/*.joblib
+
+# 4. Data Artifacts (CRITICAL: Must be ignored)
 data/*.csv
 data/*.log
 
-# Environment Variables / Secrets
-.env
+# 5. IDE and OS Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 6. Jupyter/Notebooks
+.ipynb_checkpoints/
+*.ipynb
