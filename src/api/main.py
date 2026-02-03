@@ -38,6 +38,7 @@ from src.feature_engineer import feature_engineering_pipeline
 from src.model_train import model_training_pipeline, MODEL_FEATURES
 from src.user_profile import UserProfile, UserProfileManager, initialize_profile_manager, get_profile_manager
 from src.risk_trajectory import RiskTrajectory, TrajectoryManager, initialize_trajectory_manager, get_trajectory_manager
+from src.event_chains import EventChainDetector, ChainDetectorManager, initialize_chain_detector, get_chain_detector_manager
 
 # Import logging
 try:
@@ -220,6 +221,56 @@ class TrajectoryStatistics(BaseModel):
     avg_cumulative_risk: float
     escalation_rate: float
 
+# Phase 2A Session 4: Event Chain Schemas
+class ChainEvent(BaseModel):
+    """Simplified event information within a chain."""
+    event_id: str
+    timestamp: str
+    tags: List[str]
+    anomaly_score: float
+    risk_level: str
+
+class EventChain(BaseModel):
+    """Detected sequence of suspicious events forming a pattern."""
+    chain_id: str
+    user_id: str
+    pattern_type: str
+    pattern_name: str
+    severity: str
+    pattern_description: str
+    events: List[ChainEvent]
+    event_count: int
+    start_time: str
+    end_time: str
+    duration_hours: float
+    individual_risk_sum: float
+    chain_risk: float
+    amplification_factor: float
+    matched_sequence: List[str]
+    narrative: str
+
+class ChainSummary(BaseModel):
+    """Summary of chains detected for a specific user."""
+    user_id: str
+    total_chains: int
+    chains_by_severity: Dict[str, int]
+    chains_by_type: Dict[str, int]
+    highest_risk: float
+    most_dangerous_pattern: Optional[str] = None
+    critical_count: int
+    high_count: int
+    medium_count: int
+
+class ChainStatistics(BaseModel):
+    """Global statistics for all detected event chains."""
+    total_users: int
+    total_chains: int
+    critical_chains: int
+    high_chains: int
+    medium_chains: int
+    users_with_chains: int
+    avg_chains_per_user: float
+
 # =============================================================================
 # GLOBAL DATA STORE
 # =============================================================================
@@ -233,6 +284,7 @@ class DataStore:
         self.metrics: Optional[Dict] = None
         self.profile_manager: Optional[UserProfileManager] = None  # Phase 2A: User baselines
         self.trajectory_manager: Optional[TrajectoryManager] = None  # Phase 2A: Risk trajectories
+        self.chain_manager: Optional[ChainDetectorManager] = None  # Phase 2A: Event chains
     
     def load(self):
         """Load or reload data and model."""
@@ -251,6 +303,11 @@ class DataStore:
                 logger.info("Initializing risk trajectories...")
                 self.trajectory_manager = initialize_trajectory_manager(self.df)
                 logger.info(f"✅ Calculated {len(self.trajectory_manager.trajectories)} risk trajectories")
+                
+                # Phase 2A Session 4: Initialize event chains
+                logger.info("Initializing event chain detection...")
+                self.chain_manager = initialize_chain_detector(self.df)
+                logger.info(f"✅ Detected {len(self.chain_manager.get_all_chains())} attack chains")
             
             logger.info("Data and model loaded successfully")
         except Exception as e:
@@ -764,6 +821,150 @@ def _get_escalation_recommendation(trajectory: RiskTrajectory) -> str:
     }
     
     return recommendations.get(severity, recommendations['Low'])
+
+
+# =============================================================================
+# Phase 2A Session 4: EVENT CHAIN ENDPOINTS
+# =============================================================================
+
+@app.get("/users/{user_id}/chains", response_model=List[EventChain], 
+         summary="Get User Event Chains")
+def get_user_chains(user_id: str, min_severity: Optional[str] = None):
+    """
+    Returns detected attack chains for a specific user.
+    
+    Chains are sequences of events that match known attack patterns
+    (e.g., Data Exfiltration, Privilege Abuse).
+    
+    Args:
+        user_id: User ID to analyze
+        min_severity: Optional filter ('Medium', 'High', 'Critical')
+    """
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.chain_manager is None:
+        raise HTTPException(status_code=503, detail="Chain manager not initialized")
+    
+    try:
+        detector = data_store.chain_manager.get_detector(user_id)
+        if detector is None:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+        
+        chains = detector.get_chains(min_severity=min_severity)
+        
+        # Format for response
+        response = []
+        for chain in chains:
+            # Convert timestamp and nested events
+            formatted_chain = chain.copy()
+            formatted_chain['start_time'] = chain['start_time'].isoformat()
+            formatted_chain['end_time'] = chain['end_time'].isoformat()
+            
+            formatted_events = []
+            for evt in chain['events']:
+                formatted_events.append({
+                    'event_id': evt['event_id'],
+                    'timestamp': evt['timestamp'].isoformat(),
+                    'tags': list(evt['tags']),
+                    'anomaly_score': evt['anomaly_score'],
+                    'risk_level': evt['risk_level']
+                })
+            
+            formatted_chain['events'] = formatted_events
+            response.append(EventChain(**formatted_chain))
+            
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chains for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/users/{user_id}/chains/summary", response_model=ChainSummary,
+         summary="Get User Chain Summary")
+def get_user_chain_summary(user_id: str):
+    """Returns a high-level summary of attack chains for a user."""
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.chain_manager is None:
+        raise HTTPException(status_code=503, detail="Chain manager not initialized")
+    
+    try:
+        detector = data_store.chain_manager.get_detector(user_id)
+        if detector is None:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+        
+        return ChainSummary(**detector.get_summary())
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chain summary for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/analytics/chains", response_model=List[EventChain],
+         summary="Get All Detected Chains")
+def get_all_detected_chains(min_severity: Optional[str] = None, limit: int = 50):
+    """
+    Returns all detected attack chains across all users in the system.
+    Sorted by chain risk (highest first).
+    """
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.chain_manager is None:
+        raise HTTPException(status_code=503, detail="Chain manager not initialized")
+    
+    try:
+        all_chains = data_store.chain_manager.get_all_chains(min_severity=min_severity)
+        
+        # Limit results
+        all_chains = all_chains[:limit]
+        
+        # Format for response
+        response = []
+        for chain in all_chains:
+            formatted_chain = chain.copy()
+            formatted_chain['start_time'] = chain['start_time'].isoformat()
+            formatted_chain['end_time'] = chain['end_time'].isoformat()
+            
+            formatted_events = []
+            for evt in chain['events']:
+                formatted_events.append({
+                    'event_id': evt['event_id'],
+                    'timestamp': evt['timestamp'].isoformat(),
+                    'tags': list(evt['tags']),
+                    'anomaly_score': evt['anomaly_score'],
+                    'risk_level': evt['risk_level']
+                })
+            
+            formatted_chain['events'] = formatted_events
+            response.append(EventChain(**formatted_chain))
+            
+        return response
+    except Exception as e:
+        logger.error(f"Error getting all chains: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/analytics/chain-statistics", response_model=ChainStatistics,
+         summary="Get Chain Statistics")
+def get_chain_statistics():
+    """Returns global statistics about all detected attack chains."""
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.chain_manager is None:
+        raise HTTPException(status_code=503, detail="Chain manager not initialized")
+    
+    try:
+        return ChainStatistics(**data_store.chain_manager.get_statistics())
+    except Exception as e:
+        logger.error(f"Error getting chain statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/explain/{event_id}", response_model=ExplanationResponse, summary="Get SHAP Explanation")
 def get_explanation(event_id: str):
