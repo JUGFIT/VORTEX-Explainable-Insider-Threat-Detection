@@ -305,17 +305,25 @@ const UserProfile = () => {
                     </div>
 
                     {/* Trend Indicator */}
-                    <div className={`card flex flex-col justify-between border-l-4 ${trajectory.trend === 'Escalating' ? 'border-l-red-500 bg-red-500/5' : 'border-l-green-500 bg-green-500/5'
+                    <div className={`card flex flex-col justify-between border-l-4 transition-all ${trajectory.trend?.toLowerCase() === 'escalating'
+                        ? 'border-l-red-500 bg-red-500/5'
+                        : trajectory.trend?.toLowerCase() === 'declining'
+                            ? 'border-l-green-500 bg-green-500/5'
+                            : 'border-l-blue-500 bg-blue-500/5'
                         }`}>
                         <div>
                             <div className="flex items-center gap-2 mb-4">
                                 <Activity className="w-4 h-4 text-gray-400" />
                                 <h3 className="text-xs font-black uppercase tracking-widest text-gray-400">Risk Trajectory</h3>
                             </div>
-                            <div className={`text-3xl font-black mb-2 flex items-center gap-3 ${trajectory.trend === 'Escalating' ? 'text-red-500' : 'text-green-500'
+                            <div className={`text-3xl font-black mb-2 flex items-center gap-3 transition-colors ${trajectory.trend?.toLowerCase() === 'escalating'
+                                ? 'text-red-500'
+                                : trajectory.trend?.toLowerCase() === 'declining'
+                                    ? 'text-green-500'
+                                    : 'text-blue-500'
                                 }`}>
-                                {trajectory.trend}
-                                {trajectory.trend === 'Escalating' ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
+                                <span className="capitalize">{trajectory.trend}</span>
+                                {trajectory.trend?.toLowerCase() === 'escalating' ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
                             </div>
                             <p className="text-xs text-gray-500 leading-relaxed">
                                 Current trend based on the last {currentTimeWindow} days of security events.
@@ -366,6 +374,7 @@ const UserProfile = () => {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                         <div>
                             <h3 className="text-lg font-bold">Risk Progression Map</h3>
+                            <p className="text-[10px] text-gray-500 italic mt-0.5">Points represent daily aggregates; large markers indicate high-risk events.</p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                             {refreshing && <div className="animate-spin h-4 w-4 border-2 border-vortex-accent border-t-transparent rounded-full"></div>}

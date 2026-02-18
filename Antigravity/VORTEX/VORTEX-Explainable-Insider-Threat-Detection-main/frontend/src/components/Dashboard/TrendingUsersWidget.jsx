@@ -17,9 +17,9 @@ const TrendingUsersWidget = () => {
     const fetchTrendingUsers = async () => {
         try {
             const data = await getTrendingUsers();
-            // Get top 5 users
+            // Get top 6 users
             const users = Array.isArray(data) ? data : [];
-            setTrendingUsers(users.slice(0, 5));
+            setTrendingUsers(users.slice(0, 6));
             setLoading(false);
         } catch (error) {
             console.error('Error fetching trending users:', error);

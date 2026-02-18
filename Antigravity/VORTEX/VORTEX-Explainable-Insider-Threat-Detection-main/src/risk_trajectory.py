@@ -248,17 +248,9 @@ class RiskTrajectory:
             previous_avg = float(self.events['anomaly_score'].mean()) if 'anomaly_score' in self.events.columns else 0.0
         
         # Escalation detection
-        # Risk scores are negative (more negative = higher risk)
-        # Escalation: recent_avg < previous_avg (more negative)
-        
-        if previous_avg != 0:
-            percent_change = ((recent_avg - previous_avg) / abs(previous_avg)) * 100
-        else:
-            percent_change = 0.0
-        
-        # Escalating if recent is at least 5% more negative (RELAXED for synthetic data)
-        # AND recent average is below -0.11 (slightly below mean)
-        self.is_escalating = (recent_avg < previous_avg * 1.05) and (recent_avg < -0.11)
+        # Escalating if recent is at least 10% higher than previous
+        # AND recent average is above 0.11 (above normal baseline)
+        self.is_escalating = (recent_avg > previous_avg * 1.10) and (recent_avg > 0.11)
         
         self.escalation_details = {
             'recent_7d_avg': round(recent_avg, 4),
@@ -271,18 +263,17 @@ class RiskTrajectory:
         }
     
     def _categorize_escalation_severity(self, recent_avg: float, previous_avg: float) -> str:
-        """Categorize escalation severity based on current dataset score ranges."""
-        # Thresholds adjusted for dataset where min score is -0.196
-        if recent_avg >= -0.11:
+        """Categorize escalation severity based on positive score ranges."""
+        if recent_avg <= 0.11:
             return 'None'
         
-        ratio = abs(recent_avg / previous_avg) if previous_avg != 0 else 1.0
+        ratio = (recent_avg / previous_avg) if previous_avg > 0.05 else 1.0
         
-        if recent_avg < -0.17 or ratio >= 1.4:
+        if recent_avg > 0.17 or ratio >= 1.4:
             return 'Critical'
-        elif recent_avg < -0.15 or ratio >= 1.2:
+        elif recent_avg > 0.15 or ratio >= 1.2:
             return 'High'
-        elif recent_avg < -0.13 or ratio >= 1.05:
+        elif recent_avg > 0.13 or ratio >= 1.05:
             return 'Medium'
         else:
             return 'Low'
@@ -305,10 +296,10 @@ class RiskTrajectory:
         first_half_avg = np.mean(cumulative_risks[:mid_point])
         second_half_avg = np.mean(cumulative_risks[mid_point:])
         
-        # Trend determination (risk is negative, so more negative = worse)
-        if second_half_avg < first_half_avg * 1.2:  # 20% more negative
+        # Trend determination (risk is positive, so higher = worse)
+        if second_half_avg > first_half_avg * 1.2:  # 20% increase in risk
             self.trend = 'escalating'
-        elif second_half_avg > first_half_avg * 0.8:  # 20% less negative
+        elif second_half_avg < first_half_avg * 0.8:  # 20% decrease in risk
             self.trend = 'declining'
         else:
             self.trend = 'stable'
@@ -340,6 +331,25 @@ class RiskTrajectory:
             entry for entry in self.trajectory_data
             if pd.to_datetime(entry['date']).date() >= cutoff_date
         ]
+        
+        # If we have only 1 point in the filtered window (common for new injections),
+        # add a "ghost" point from the previous day with 0 risk to help Recharts
+        # draw a visible line/area.
+        if len(filtered) == 1 and len(self.trajectory_data) > 1:
+            idx = self.trajectory_data.index(filtered[0])
+            if idx > 0:
+                # Add the preceding point regardless of cutoff
+                filtered.insert(0, self.trajectory_data[idx-1])
+            else:
+                # Create a zero-stats point for the day before
+                prev_date = pd.to_datetime(filtered[0]['date']) - timedelta(days=1)
+                ghost = filtered[0].copy()
+                ghost['date'] = prev_date.strftime('%Y-%m-%d')
+                ghost['events'] = 0
+                ghost['avg_risk'] = 0.0
+                ghost['cumulative_risk'] = 0.0
+                ghost['running_cumulative_risk'] = 0.0
+                filtered.insert(0, ghost)
         
         return filtered
     

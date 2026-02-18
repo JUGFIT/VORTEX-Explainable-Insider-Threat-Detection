@@ -61,8 +61,9 @@ class UserProfile:
             self.historical_events['timestamp'] = pd.to_datetime(self.historical_events['timestamp'])
 
         if 'anomaly_score' in self.historical_events.columns:
+            # High scores (> 0.4) are anomalies; normal baseline is established from stable activity
             normal_events = self.historical_events[
-                self.historical_events['anomaly_score'] > -0.3
+                self.historical_events['anomaly_score'] < 0.2
             ]
         else:
             # If no anomaly scores yet, use all events
@@ -259,9 +260,9 @@ class UserProfile:
         """
         baseline_score = self.baseline['baseline_score']
         
-        if baseline_score < -0.5:
+        if baseline_score > 0.3:
             return 'High'  # User's normal is already risky
-        elif baseline_score < -0.2:
+        elif baseline_score > 0.15:
             return 'Medium'  # Elevated baseline
         else:
             return 'Low'  # Normal baseline

@@ -40,7 +40,18 @@ const GlobalAlertFeed = () => {
     const formatDuration = (hours) => {
         if (hours < 1) return `${Math.round(hours * 60)}m`;
         if (hours < 24) return `${Math.round(hours)}h`;
-        return `${Math.round(hours / 24)}d`;
+        return `${(hours / 24).toFixed(1)}d`;
+    };
+
+    const renderNarrative = (text) => {
+        if (!text) return null;
+        const parts = text.split(/(\*\*.*?\*\*)/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+                return <strong key={i} className="text-white font-black">{part.slice(2, -2)}</strong>;
+            }
+            return part;
+        });
     };
 
     if (loading) {
@@ -133,8 +144,8 @@ const GlobalAlertFeed = () => {
                                         <h5 className="text-sm font-semibold text-gray-300 mb-2">
                                             Attack Narrative:
                                         </h5>
-                                        <p className="text-sm text-gray-400 leading-relaxed">
-                                            {pattern.narrative || pattern.pattern_description || pattern.description}
+                                        <p className="text-sm text-gray-400 leading-relaxed italic border-l-2 border-purple-500/30 pl-3 py-1">
+                                            {renderNarrative(pattern.narrative || pattern.pattern_description || pattern.description)}
                                         </p>
                                     </div>
 

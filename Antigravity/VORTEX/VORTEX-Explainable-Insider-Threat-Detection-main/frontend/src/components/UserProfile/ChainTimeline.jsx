@@ -11,6 +11,18 @@ const ChainTimeline = ({ chain }) => {
         return `${(hours / 24).toFixed(1)} days`;
     };
 
+    // Helper to render basic markdown bolding
+    const renderNarrative = (text) => {
+        if (!text) return null;
+        const parts = text.split(/(\*\*.*?\*\*)/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+                return <strong key={i} className="text-white font-black">{part.slice(2, -2)}</strong>;
+            }
+            return part;
+        });
+    };
+
     return (
         <div className="border border-gray-700 rounded-lg bg-gray-800/50 overflow-hidden">
             {/* Header - Always Visible */}
@@ -66,7 +78,7 @@ const ChainTimeline = ({ chain }) => {
                             <AlertTriangle className="w-4 h-4" />
                             Attack Narrative
                         </h5>
-                        <p className="text-sm text-gray-300 leading-relaxed">{chain.narrative}</p>
+                        <p className="text-sm text-gray-300 leading-relaxed">{renderNarrative(chain.narrative)}</p>
                     </div>
 
                     {/* Event Timeline */}

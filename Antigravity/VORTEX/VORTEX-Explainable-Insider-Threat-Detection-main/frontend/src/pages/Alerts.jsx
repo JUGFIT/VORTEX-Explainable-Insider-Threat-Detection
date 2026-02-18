@@ -29,11 +29,12 @@ const Alerts = () => {
     // Deep-link context from chart dots
     const urlUser = searchParams.get('user') || '';
     const urlDate = searchParams.get('date') || '';
+    const urlSearch = searchParams.get('search') || '';
 
     const [loading, setLoading] = useState(true);
     const [events, setEvents] = useState([]);
     const [counts, setCounts] = useState(null);
-    const [filters, setFilters] = useState({ riskLevel: 'all', search: urlUser });
+    const [filters, setFilters] = useState({ riskLevel: 'all', search: urlSearch || urlUser });
     const [sortBy, setSortBy] = useState('anomaly_score');
     const [sortOrder, setSortOrder] = useState('desc');
     const [page, setPage] = useState(0);

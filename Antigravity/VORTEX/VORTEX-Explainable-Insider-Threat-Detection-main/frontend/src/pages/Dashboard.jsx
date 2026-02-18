@@ -169,20 +169,20 @@ const Dashboard = () => {
             </div>
 
             {/* Main Content: 2-Column Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div className="flex flex-col lg:flex-row gap-6 mb-8 items-start">
                 {/* Left Column - Global Alert Feed (2/3 width) */}
-                <div className="lg:col-span-2">
+                <div className="w-full lg:w-2/3">
                     <GlobalAlertFeed />
                 </div>
 
                 {/* Right Column - Trending Users (1/3 width) */}
-                <div>
+                <div className="w-full lg:w-1/3">
                     <TrendingUsersWidget />
                 </div>
             </div>
 
-            {/* Recent High-Risk Events */}
-            <div className="card">
+            {/* Recent High-Risk Events - Full Width */}
+            <div className="card mb-8">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold">Recent High-Risk Events</h3>
                     <button
@@ -233,6 +233,11 @@ const Dashboard = () => {
                                     </td>
                                 </tr>
                             ))}
+                            {recentEvents.length === 0 && (
+                                <tr>
+                                    <td colSpan="6" className="py-8 text-center text-gray-500">No high-risk events found</td>
+                                </tr>
+                            )}
                         </tbody>
                     </table>
                 </div>

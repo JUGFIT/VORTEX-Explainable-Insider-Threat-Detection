@@ -8,6 +8,7 @@ import UserProfile from './pages/UserProfile';
 import Analytics from './pages/Analytics';
 import Trajectories from './pages/Trajectories';
 import Chains from './pages/Chains';
+import Settings from './pages/Settings';
 
 function App() {
   return (
@@ -21,7 +22,7 @@ function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/trajectories" element={<Trajectories />} />
         <Route path="/chains" element={<Chains />} />
-        <Route path="/settings" element={<Dashboard />} /> {/* Placeholder */}
+        <Route path="/settings" element={<Settings />} />
       </Routes>
     </Router>
   );
