@@ -1,0 +1,14 @@
+============================================================
+TESTING STAGE 4: NARRATIVE & MITIGATION GENERATION
+============================================================
+
+[TEST 1] Feature Name Mapping
+------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\milin\OneDrive\Desktop\md\VORT\VORTEX-Explainable-Insider-Threat-Detection\test_stage4.py", line 57, in <module>
+    print(f"  {technical_name:40s} \u2192 {human_name}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 43: character maps to <undefined>
