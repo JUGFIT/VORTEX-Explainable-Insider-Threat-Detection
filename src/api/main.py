@@ -7,6 +7,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -55,18 +56,39 @@ except ImportError:
 # FASTAPI APP INITIALIZATION
 # =============================================================================
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    import logging
+    _logger = logging.getLogger("vortex.api")
+    _logger.info("🚀 Starting VORTEX X-ADS API...")
+    try:
+        data_store.load()
+        if data_store.is_loaded():
+            _logger.info("✅ API ready with data and model loaded")
+        else:
+            _logger.warning("⚠️ API started but data/model not available")
+    except Exception as e:
+        _logger.error(f"❌ Error during startup: {e}")
+    yield
+
 app = FastAPI(
     title="VORTEX X-ADS API",
     description="Explainable Anomaly Detection System for Insider Threat Detection",
     version="2.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # --- CORS Configuration ---
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
@@ -139,6 +161,7 @@ class UserRiskSummary(BaseModel):
     """Risk summary for a specific user."""
     user_id: str
     total_events: int
+    critical_risk_events: int
     high_risk_events: int
     medium_risk_events: int
     low_risk_events: int
@@ -196,13 +219,14 @@ class TrajectoryTimepoint(BaseModel):
 
 class EscalationDetails(BaseModel):
     """Details about risk escalation detection."""
-    recent_7d_avg: float
-    previous_7d_avg: float
-    percent_change: float
-    recent_event_count: int
-    previous_event_count: int
-    threshold_met: bool
-    severity: str
+    recent_7d_avg: float = 0.0
+    previous_7d_avg: float = 0.0
+    percent_change: float = 0.0
+    recent_event_count: int = 0
+    previous_event_count: int = 0
+    threshold_met: bool = False
+    severity: str = "None"
+    reason: Optional[str] = None
 
 class TrajectoryData(BaseModel):
     """Complete risk trajectory data for a user."""
@@ -315,6 +339,14 @@ class SimulationResponse(BaseModel):
     events_injected: int
     timestamp: str
 
+class TrendingUser(BaseModel):
+    """Details for a user with escalating risk."""
+    user_id: str
+    recent_event_count: int
+    percent_change: float
+    escalation_severity: str
+    current_risk: float
+
 # =============================================================================
 # GLOBAL DATA STORE
 # =============================================================================
@@ -369,8 +401,12 @@ class DataStore:
             raise
     
     def is_loaded(self) -> bool:
-        """Check if data and model are loaded."""
-        return self.df is not None and self.model is not None
+        """Check if data is loaded (essential for all operations)."""
+        return self.df is not None
+    
+    def is_model_loaded(self) -> bool:
+        """Check if model is loaded (optional but preferred)."""
+        return self.model is not None
     
     def reload(self):
         """Force reload of data and model."""
@@ -390,14 +426,17 @@ def load_processed_data():
         logger.warning(f"Processed data file not found: {PROCESSED_DATA_FILE}")
         return None
     
-    df = pd.read_csv(PROCESSED_DATA_FILE)
+    df = pd.read_csv(PROCESSED_DATA_FILE, low_memory=False)
     
     # Risk categorization
     q_low = df['anomaly_score'].quantile(0.80)
     q_high = df['anomaly_score'].quantile(0.95)
+    q_critical = df['anomaly_score'].quantile(0.99)
     
     def categorize_risk(score):
-        if score >= q_high:
+        if score >= q_critical:
+            return "Critical"
+        elif score >= q_high:
             return "High"
         elif score >= q_low:
             return "Medium"
@@ -448,21 +487,8 @@ def load_model_metrics():
         return None
 
 # =============================================================================
-# STARTUP EVENT
+# STARTUP EVENT (handled via lifespan context manager above)
 # =============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize data and model on startup."""
-    logger.info("🚀 Starting VORTEX X-ADS API...")
-    try:
-        data_store.load()
-        if data_store.is_loaded():
-            logger.info("✅ API ready with data and model loaded")
-        else:
-            logger.warning("⚠️ API started but data/model not available")
-    except Exception as e:
-        logger.error(f"❌ Error during startup: {e}")
 
 # =============================================================================
 # API ENDPOINTS
@@ -518,52 +544,216 @@ def health_check():
 @app.get("/risks", response_model=List[RiskEvent], summary="Get All Risk Events")
 def get_risk_events(
     risk_level: Optional[str] = None,
+    user_id: Optional[str] = None,
+    date: Optional[str] = None,          # YYYY-MM-DD — filter to a single day
+    search: Optional[str] = None,        # Global search text
     limit: Optional[int] = None,
-    offset: int = 0
+    offset: int = 0,
+    sort_by: str = "anomaly_score",
+    sort_order: str = "desc"
 ):
     """
-    Returns filtered risk events.
-    
+    Returns filtered and sorted risk events.
+
     - **risk_level**: Filter by 'High', 'Medium', or 'Low' (optional)
+    - **user_id**: Filter to a specific user (optional)
+    - **date**: Filter to a specific day in YYYY-MM-DD format (optional)
+    - **search**: Search across event_id and user_id (optional)
     - **limit**: Maximum number of events to return (optional)
     - **offset**: Number of events to skip (pagination)
+    - **sort_by**: Column to sort by — 'anomaly_score', 'timestamp', 'user_id', 'risk_level'
+    - **sort_order**: 'asc' or 'desc' (default: desc)
     """
     if not data_store.is_loaded():
         raise HTTPException(
             status_code=503,
             detail="Service data not loaded. Run /pipeline/generate-data first."
         )
-    
+
     df = data_store.df
-    
-    # Filter by risk level if specified
+
+    # Filter by user
+    if user_id:
+        df = df[df['user_id'] == user_id]
+
+    # Filter by search string (partial match on event_id or user_id)
+    if search:
+        search_lower = search.lower()
+        search_mask = (
+            df['event_id'].astype(str).str.lower().str.contains(search_lower, na=False) |
+            df['user_id'].astype(str).str.lower().str.contains(search_lower, na=False)
+        )
+        df = df[search_mask]
+
+    # Filter by date (single day)
+    if date:
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df[df['timestamp'].dt.date.astype(str) == date]
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    # Filter by risk level
     if risk_level:
-        if risk_level not in ['High', 'Medium', 'Low']:
-            raise HTTPException(status_code=400, detail="Invalid risk_level. Use 'High', 'Medium', or 'Low'")
+        if risk_level not in ['Critical', 'High', 'Medium', 'Low']:
+            raise HTTPException(status_code=400, detail="Invalid risk_level. Use 'Critical', 'High', 'Medium', or 'Low'")
         df = df[df['risk_level'] == risk_level]
+
+    # Validate sort_by column
+    VALID_SORT_COLS = {
+        'anomaly_score': 'anomaly_score',
+        'timestamp': 'timestamp',
+        'user_id': 'user_id',
+        'risk_level': 'risk_level'
+    }
+    sort_col = VALID_SORT_COLS.get(sort_by, 'anomaly_score')
+    ascending = sort_order.lower() == 'asc'
+    
+    if sort_col == 'risk_level':
+        risk_map = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+        df['risk_sort'] = df['risk_level'].map(risk_map).fillna(0)
+        df = df.sort_values(by=['risk_sort', 'anomaly_score'], ascending=[ascending, ascending])
+        df = df.drop(columns=['risk_sort'])
     else:
-        # Default: show Medium and High risks
-        df = df[df['risk_level'].isin(['Medium', 'High'])]
-    
-    # Sort by anomaly score descending
-    df = df.sort_values(by='anomaly_score', ascending=False)
-    
+        df = df.sort_values(by=sort_col, ascending=ascending)
+
     # Apply pagination
     if limit:
         df = df.iloc[offset:offset + limit]
     else:
         df = df.iloc[offset:]
-    
+
     if df.empty:
         return []
-    
+
     alerts_list = df[[
         'event_id', 'user_id', 'timestamp', 'anomaly_score', 'risk_level', 'anomaly_flag_truth'
     ]].to_dict('records')
-    
+
     return alerts_list
 
+@app.get("/risks/count", summary="Get Event Counts (for Before/After Injection Tracking)")
+def get_risk_counts(
+    user_id: Optional[str] = None, 
+    search: Optional[str] = None,
+    date: Optional[str] = None,
+    include_per_user: bool = False
+):
+    """
+    Returns total event counts, optionally filtered by user, search term, or date.
+    Use this to track before/after injection changes.
+    
+    - **user_id**: Optional user ID to get counts for a specific user
+    - **search**: Search across event_id and user_id (optional)
+    - **date**: Filter to a specific day in YYYY-MM-DD format (optional)
+    - **include_per_user**: Set to true to include per-user breakdown (expensive, off by default)
+    """
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    df = data_store.df
+    if user_id:
+        df = df[df['user_id'] == user_id]
+        
+    if search:
+        search_lower = search.lower()
+        search_mask = (
+            df['event_id'].astype(str).str.lower().str.contains(search_lower, na=False) |
+            df['user_id'].astype(str).str.lower().str.contains(search_lower, na=False)
+        )
+        df = df[search_mask]
+        
+    if date:
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df[df['timestamp'].dt.date.astype(str) == date]
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    
+    total = len(df)
+    by_risk = df['risk_level'].value_counts().to_dict() if total > 0 else {}
+    injected = int(df['anomaly_flag_truth'].sum()) if total > 0 else 0
+    
+    # Per-user breakdown only when explicitly requested (expensive for large datasets)
+    per_user = {}
+    if include_per_user and not user_id and not search:
+        per_user = data_store.df.groupby('user_id').size().to_dict()
+    
+    return {
+        "total_events": total,
+        "by_risk_level": by_risk,
+        "injected_anomalies": injected,
+        "per_user_counts": per_user,
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/simulation/status", summary="Get Log Generation Status (Before/After Comparison)")
+def get_simulation_status(user_id: Optional[str] = None):
+    """
+    Returns current event counts per user for before/after log generation comparison.
+    Call this BEFORE and AFTER generation to see the delta.
+    """
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    df = data_store.df
+    
+    if user_id:
+        user_df = df[df['user_id'] == user_id]
+        total = len(user_df)
+        critical = int((user_df['risk_level'] == 'Critical').sum())
+        high = int((user_df['risk_level'] == 'High').sum())
+        medium = int((user_df['risk_level'] == 'Medium').sum())
+        low = int((user_df['risk_level'] == 'Low').sum())
+        injected = int(user_df['anomaly_flag_truth'].sum())
+        avg_score = float(user_df['anomaly_score'].mean()) if total > 0 else 0.0
+        max_score = float(user_df['anomaly_score'].max()) if total > 0 else 0.0
+        
+        # Baseline info
+        baseline_score = 0.0
+        baseline_risk = "Unknown"
+        if data_store.profile_manager:
+            profile = data_store.profile_manager.get_profile(user_id)
+            if profile:
+                baseline_score = float(profile.baseline.get('baseline_score', 0.0))
+                baseline_risk = profile.baseline_risk_level
+        
+        return {
+            "user_id": user_id,
+            "total_events": total,
+            "critical_risk_events": critical,
+            "high_risk_events": high,
+            "medium_risk_events": medium,
+            "low_risk_events": low,
+            "injected_anomalies": injected,
+            "avg_anomaly_score": round(avg_score, 4),
+            "max_anomaly_score": round(max_score, 4),
+            "baseline_score": round(baseline_score, 4),
+            "baseline_risk_level": baseline_risk,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    # Global status
+    total = len(df)
+    per_user = {}
+    for uid, udf in df.groupby('user_id'):
+        per_user[uid] = {
+            "total": len(udf),
+            "critical": int((udf['risk_level'] == 'Critical').sum()),
+            "high": int((udf['risk_level'] == 'High').sum()),
+            "injected": int(udf['anomaly_flag_truth'].sum()),
+            "avg_score": round(float(udf['anomaly_score'].mean()), 4)
+        }
+    
+    return {
+        "total_events": total,
+        "total_users": df['user_id'].nunique(),
+        "per_user": per_user,
+        "timestamp": datetime.now().isoformat()
+    }
+
 @app.get("/risks/user/{user_id}", response_model=UserRiskSummary, summary="Get User Risk Summary")
+
 def get_user_risks(user_id: str, limit: int = 10):
     """
     Returns risk summary and recent events for a specific user.
@@ -581,11 +771,12 @@ def get_user_risks(user_id: str, limit: int = 10):
     
     # Calculate statistics
     total_events = len(user_df)
+    critical_risk = len(user_df[user_df['risk_level'] == 'Critical'])
     high_risk = len(user_df[user_df['risk_level'] == 'High'])
     medium_risk = len(user_df[user_df['risk_level'] == 'Medium'])
     low_risk = len(user_df[user_df['risk_level'] == 'Low'])
     avg_score = float(user_df['anomaly_score'].mean())
-    max_score = float(user_df['anomaly_score'].max())
+    max_score = float(user_df['anomaly_score'].max()) 
     
     # Get recent events
     recent = user_df.sort_values(by='timestamp', ascending=False).head(limit)
@@ -596,6 +787,7 @@ def get_user_risks(user_id: str, limit: int = 10):
     return UserRiskSummary(
         user_id=user_id,
         total_events=total_events,
+        critical_risk_events=critical_risk,
         high_risk_events=high_risk,
         medium_risk_events=medium_risk,
         low_risk_events=low_risk,
@@ -801,37 +993,8 @@ def get_escalation_analysis(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/analytics/trending-users", summary="Get Trending Users")
-def get_trending_users(trend: str = 'escalating', limit: int = 20):
-    """
-    Returns users filtered by risk trend.
-    
-    Useful for identifying which users are escalating in risk.
-    
-    Args:
-        trend: Filter by 'escalating', 'stable', or 'declining' (default: escalating)
-        limit: Max number of users to return (default: 20)
-        
-    Returns:
-        List of users matching trend criteria, sorted by cumulative risk
-    """
-    if not data_store.is_loaded():
-        raise HTTPException(status_code=503, detail="Service data not loaded")
-    
-    if data_store.trajectory_manager is None:
-        raise HTTPException(status_code=503, detail="Trajectory manager not initialized")
-    
-    try:
-        if trend == 'escalating':
-            users = data_store.trajectory_manager.get_escalating_users()
-        else:
-            users = data_store.trajectory_manager.get_users_by_trend(trend)
-        
-        # Limit results
-        return users[:limit]
-    except Exception as e:
-        logger.error(f"Error getting trending users: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Removed duplicate /analytics/trending-users endpoint to avoid conflict.
+# The primary implementation is at the bottom of the file near other analytics endpoints.
 
 
 @app.get("/analytics/trajectory-statistics", response_model=TrajectoryStatistics,
@@ -1021,6 +1184,87 @@ def get_chain_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/analytics/trending-users", response_model=List[TrendingUser],
+         summary="Get Most Escalating Users")
+def get_trending_users(trend: str = 'escalating', limit: int = 20):
+    """Returns users with the highest risk escalation based on trend."""
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.trajectory_manager is None:
+        raise HTTPException(status_code=503, detail="Trajectory manager not initialized")
+    
+    try:
+        if trend == 'escalating':
+            users = data_store.trajectory_manager.get_escalating_users()
+        else:
+            users = data_store.trajectory_manager.get_users_by_trend(trend)
+        
+        trending = []
+        for user in users[:limit]:
+            details = user.get('escalation_details', {})
+            # Use absolute value for percent_change so it plots as positive "velocity" in charts
+            # since risk scores are negative (more negative = more risk).
+            velocity = abs(details.get('percent_change', 0.0))
+            
+            trending.append(TrendingUser(
+                user_id=user['user_id'],
+                recent_event_count=details.get('recent_event_count', 0),
+                percent_change=velocity,
+                escalation_severity=details.get('severity', 'None'),
+                current_risk=user.get('cumulative_risk', 0.0)
+            ))
+        
+        return trending
+    except Exception as e:
+        logger.error(f"Error getting trending users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/users/{user_id}/chains", response_model=List[EventChain],
+         summary="Get User Event Chains")
+def get_user_chains(user_id: str):
+    """Returns detected event chains for a specific user."""
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    
+    if data_store.chain_manager is None:
+        raise HTTPException(status_code=503, detail="Chain manager not initialized")
+    
+    try:
+        detector = data_store.chain_manager.get_detector(user_id)
+        if detector is None:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+        
+        chains = detector.get_chains()
+        
+        response = []
+        for chain in chains:
+            formatted_chain = chain.copy()
+            formatted_chain['start_time'] = chain['start_time'].isoformat()
+            formatted_chain['end_time'] = chain['end_time'].isoformat()
+            
+            formatted_events = []
+            for evt in chain['events']:
+                formatted_events.append({
+                    'event_id': evt['event_id'],
+                    'timestamp': evt['timestamp'].isoformat(),
+                    'tags': list(evt['tags']),
+                    'anomaly_score': evt['anomaly_score'],
+                    'risk_level': evt['risk_level']
+                })
+            
+            formatted_chain['events'] = formatted_events
+            response.append(EventChain(**formatted_chain))
+            
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chains for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # Phase 2A Session 5: TEMPORAL PATTERN ENDPOINTS
 # =============================================================================
@@ -1070,13 +1314,13 @@ def get_temporal_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
-# Phase 2B: THREAT SIMULATION ENDPOINTS
+# Phase 2B: EVENT LOG GENERATOR ENDPOINTS
 # =============================================================================
 
 @app.get("/simulation/options", response_model=SimulationOptions,
-         summary="Get Simulation Options")
+         summary="Get Log Generator Options")
 def get_simulation_options():
-    """Returns metadata for the simulation UI (users, scenarios, parameters)."""
+    """Returns metadata for the log generator UI (users, scenarios, parameters)."""
     if not data_store.is_loaded():
         raise HTTPException(status_code=503, detail="Service data not loaded")
     
@@ -1091,12 +1335,13 @@ def get_simulation_options():
 
 
 @app.post("/simulation/inject", response_model=SimulationResponse,
-          summary="Inject Simulated Threat")
+          summary="Generate Event Telemetry")
 def inject_threat(request: SimulationRequest):
     """
-    Injects a custom-parameterized security threat into a user's history.
+    Generates custom-parameterized event telemetry into a user's history.
     
-    This writes to the CSV and reloads the system so the threat is detectable.
+    Performs a targeted hot-reload for the affected user only — much faster
+    than a full system reload.
     """
     if not data_store.is_loaded():
         raise HTTPException(status_code=503, detail="Service data not loaded")
@@ -1105,26 +1350,93 @@ def inject_threat(request: SimulationRequest):
         raise HTTPException(status_code=503, detail="Simulator not initialized")
     
     try:
-        # 1. Inject (creates events, pre-calculates ML features & anomaly scores, saves to disk)
+        user_id = request.user_id
+        
+        # 1. Generate — creates events with timestamps relative to the dataset's
+        #    own max timestamp so they appear in the correct lookback windows.
         injected_count = data_store.simulator.inject_threat(
-            request.user_id, 
-            request.scenario_id, 
+            user_id,
+            request.scenario_id,
             request.parameters,
             data_store.df
         )
         
-        # 2. Reload everything so the new threat is immediately "detected" by managers
-        data_store.reload()
+        # 2. Hot-reload: re-read the CSV and update only the affected user's data.
+        #    This is ~50x faster than a full reload() for large datasets.
+        try:
+            new_df = load_processed_data()
+            if new_df is not None:
+                data_store.df = new_df
+                user_df = new_df[new_df['user_id'] == user_id].copy()
+                
+                if not user_df.empty:
+                    # Refresh trajectory for this user only
+                    if data_store.trajectory_manager is not None:
+                        from src.risk_trajectory import RiskTrajectory
+                        data_store.trajectory_manager.trajectories[user_id] = RiskTrajectory(user_id, user_df)
+                    
+                    # Refresh chain detection for this user only
+                    if data_store.chain_manager is not None:
+                        from src.event_chains import EventChainDetector
+                        data_store.chain_manager.detectors[user_id] = EventChainDetector(user_id, user_df)
+                    
+                    # Refresh temporal patterns for this user only
+                    if data_store.temporal_manager is not None:
+                        from src.temporal_patterns import TemporalPatternDetector
+                        data_store.temporal_manager.detectors[user_id] = TemporalPatternDetector(user_id, user_df)
+                        
+                logger.info(f"Hot-reloaded data for user {user_id} after log generation ({len(user_df)} events)")
+        except Exception as reload_err:
+            # If hot-reload fails, fall back to full reload
+            logger.warning(f"Hot-reload failed ({reload_err}), falling back to full reload")
+            data_store.reload()
         
+
         return SimulationResponse(
             status="success",
-            message=f"Successfully injected {request.scenario_id} for user {request.user_id}",
+            message=f"Successfully generated {request.scenario_id} telemetry for user {user_id}",
             events_injected=injected_count,
             timestamp=datetime.now().isoformat()
         )
     except Exception as e:
-        logger.error(f"Simulation injection failed: {e}")
+        logger.error(f"Event telemetry generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/simulation/purge", summary="Purge All Simulated Events")
+def purge_simulated_events():
+    """
+    Removes all events starting with 'sim_' from both raw and processed CSV files.
+    This restores the dataset to its pre-simulation state.
+    """
+    try:
+        removed_total = 0
+        paths = [RAW_DATA_FILE, PROCESSED_DATA_FILE]
+        
+        for path in paths:
+            if os.path.exists(path):
+                df = pd.read_csv(path, low_memory=False)
+                initial_len = len(df)
+                # Remove rows where event_id starts with 'sim_'
+                df = df[~df['event_id'].astype(str).str.startswith('sim_')]
+                final_len = len(df)
+                
+                if initial_len != final_len:
+                    df.to_csv(path, index=False)
+                    removed_total += (initial_len - final_len)
+                    logger.info(f"Purged {initial_len - final_len} simulated rows from {path}")
+        
+        # Reload the data store to reflect changes
+        data_store.reload()
+        
+        return {
+            "status": "success",
+            "message": f"Successfully purged {removed_total} simulated events from storage",
+            "removed_count": removed_total,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Purge failed: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Purge failed: {str(e)}")
 
 @app.get("/explain/{event_id}", response_model=ExplanationResponse, summary="Get SHAP Explanation")
 def get_explanation(event_id: str):
@@ -1137,7 +1449,11 @@ def get_explanation(event_id: str):
         raise HTTPException(status_code=503, detail="Service data not loaded")
     
     try:
-        explanation_result = xai_pipeline(event_id=event_id)
+        explanation_result = xai_pipeline(
+            event_id=event_id, 
+            df=data_store.df, 
+            model=data_store.model
+        )
         
         if explanation_result is None:
             raise HTTPException(
@@ -1331,4 +1647,4 @@ def reload_data():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=False)

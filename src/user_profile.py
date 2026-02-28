@@ -61,8 +61,10 @@ class UserProfile:
             self.historical_events['timestamp'] = pd.to_datetime(self.historical_events['timestamp'])
 
         if 'anomaly_score' in self.historical_events.columns:
+            # Events with score > 0.1 are significant anomalies. 
+            # Baseline should represent "stable" behavior, so we exclude these.
             normal_events = self.historical_events[
-                self.historical_events['anomaly_score'] > -0.3
+                self.historical_events['anomaly_score'] < 0.1
             ]
         else:
             # If no anomaly scores yet, use all events
@@ -75,34 +77,34 @@ class UserProfile:
         # Calculate baseline metrics
         baseline = {
             # File access patterns
-            'avg_files_accessed': normal_events.get('file_access_count', pd.Series([0])).mean(),
-            'std_files_accessed': normal_events.get('file_access_count', pd.Series([0])).std(),
-            'max_files_accessed': normal_events.get('file_access_count', pd.Series([0])).max(),
+            'avg_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).mean()),
+            'std_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).std() or 0.0),
+            'max_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).max()),
             
             # Upload patterns
-            'avg_upload_size': normal_events.get('upload_size_mb', pd.Series([0])).mean(),
-            'std_upload_size': normal_events.get('upload_size_mb', pd.Series([0])).std(),
-            'max_upload_size': normal_events.get('upload_size_mb', pd.Series([0])).max(),
+            'avg_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).mean()),
+            'std_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).std() or 0.0),
+            'max_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).max()),
             
             # Temporal patterns
-            'typical_hours': self._calculate_typical_hours(normal_events),
-            'typical_days': self._calculate_typical_days(normal_events),
-            'off_hours_frequency': self._calculate_off_hours_frequency(normal_events),
+            'typical_hours': [int(h) for h in self._calculate_typical_hours(normal_events)],
+            'typical_days': [int(d) for d in self._calculate_typical_days(normal_events)],
+            'off_hours_frequency': float(self._calculate_off_hours_frequency(normal_events)),
             
-            # Risk baseline
-            'baseline_score': normal_events.get('anomaly_score', pd.Series([-0.1])).mean(),
-            'baseline_score_std': normal_events.get('anomaly_score', pd.Series([0])).std(),
+            # Risk baseline (mean of normal events)
+            'baseline_score': float(normal_events.get('anomaly_score', pd.Series([-0.1])).mean()),
+            'baseline_score_std': float(normal_events.get('anomaly_score', pd.Series([0])).std() or 0.0),
             
             # Activity level
-            'events_per_day': len(normal_events) / max(
+            'events_per_day': float(len(normal_events) / max(
                 (normal_events['timestamp'].max() - normal_events['timestamp'].min()).days,
                 1
-            ) if 'timestamp' in normal_events.columns else 1.0,
+            ) if 'timestamp' in normal_events.columns else 1.0),
             
             # Data sufficiency
-            'historical_event_count': len(self.historical_events),
-            'normal_event_count': len(normal_events),
-            'baseline_confidence': min(len(normal_events) / 90.0, 1.0)  # 90 events = 100% confident
+            'historical_event_count': int(len(self.historical_events)),
+            'normal_event_count': int(len(normal_events)),
+            'baseline_confidence': float(min(len(normal_events) / 90.0, 1.0))
         }
         
         return baseline
@@ -249,22 +251,32 @@ class UserProfile:
     
     def categorize_baseline_risk(self) -> str:
         """
-        Categorize user's baseline risk level.
-        
-        Some users have inherently risky baselines (e.g., sys admins).
-        This is normal for them, but still elevated compared to regular users.
+        Categorize user's baseline risk level based on the frequency 
+        of high-intensity anomalous events.
         
         Returns:
             'Low', 'Medium', or 'High'
         """
-        baseline_score = self.baseline['baseline_score']
+        if 'anomaly_score' not in self.historical_events.columns or len(self.historical_events) == 0:
+            return 'Low'
+            
+        # Event-based risk counting
+        # Critical events: Very high anomaly scores (> 0.15)
+        critical_event_count = len(self.historical_events[self.historical_events['anomaly_score'] >= 0.15])
         
-        if baseline_score < -0.5:
-            return 'High'  # User's normal is already risky
-        elif baseline_score < -0.2:
-            return 'Medium'  # Elevated baseline
-        else:
-            return 'Low'  # Normal baseline
+        # High risk events: Significant anomaly scores (> 0.10)
+        high_risk_event_count = len(self.historical_events[self.historical_events['anomaly_score'] >= 0.10])
+        
+        # Elevated thresholds since dataset generation created more noise than expected
+        # Require 30 critical events or 80 high-risk events to be High Risk
+        if critical_event_count >= 30 or high_risk_event_count >= 80:
+            return 'High'
+            
+        # Require 20 critical events or 60 high-risk events to be Medium Risk
+        if critical_event_count >= 20 or high_risk_event_count >= 60:
+            return 'Medium'
+            
+        return 'Low'
     
     def calculate_divergence(self, new_event: pd.Series) -> Dict:
         """
@@ -352,18 +364,32 @@ class UserProfile:
     
     def to_dict(self) -> Dict:
         """Export profile as dictionary for API responses."""
+        # Helper to convert numpy types to native types
+        def _to_native(val):
+            if isinstance(val, (np.integer, np.int64, np.int32)):
+                return int(val)
+            if isinstance(val, (np.floating, np.float64, np.float32)):
+                return float(val)
+            if isinstance(val, (np.bool_, bool)):
+                return bool(val)
+            if isinstance(val, dict):
+                return {k: _to_native(v) for k, v in val.items()}
+            if isinstance(val, (list, tuple)):
+                return [_to_native(i) for i in val]
+            return val
+
         return {
             'user_id': self.user_id,
-            'baseline': self.baseline,
-            'behavioral_fingerprint': self.behavioral_fingerprint,
-            'baseline_risk_level': self.baseline_risk_level,
-            'is_baseline_elevated': self.baseline_risk_level in ['Medium', 'High'],
-            'data_quality': {
+            'baseline': _to_native(self.baseline),
+            'behavioral_fingerprint': _to_native(self.behavioral_fingerprint),
+            'baseline_risk_level': str(self.baseline_risk_level),
+            'is_baseline_elevated': bool(self.baseline_risk_level in ['Medium', 'High']),
+            'data_quality': _to_native({
                 'historical_events': self.baseline['historical_event_count'],
                 'confidence': self.baseline['baseline_confidence'],
                 'confidence_level': 'High' if self.baseline['baseline_confidence'] > 0.8 else
                                    'Medium' if self.baseline['baseline_confidence'] > 0.5 else 'Low'
-            }
+            })
         }
 
 

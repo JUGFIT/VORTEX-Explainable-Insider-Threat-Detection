@@ -40,15 +40,15 @@ class EventChainDetector:
                 {
                     'sequence': ['off_hours_access', 'mass_file_access', 'large_upload'],
                     'description': 'Off-hours access followed by mass file access and large upload',
-                    'min_events': 3,
-                    'max_time_window_hours': 8
+                    'min_events': 2,
+                    'max_time_window_hours': 24
                 },
                 # Pattern 2: Stealthy exfiltration
                 {
                     'sequence': ['sensitive_file_access', 'external_connection', 'repeated_uploads'],
                     'description': 'Sensitive file access with external connection and repeated uploads',
-                    'min_events': 3,
-                    'max_time_window_hours': 24
+                    'min_events': 2,
+                    'max_time_window_hours': 48
                 },
                 # Pattern 3: USB exfiltration
                 {
@@ -69,15 +69,15 @@ class EventChainDetector:
                 {
                     'sequence': ['off_hours', 'privilege_use', 'system_modification'],
                     'description': 'Off-hours activity with privilege abuse and system changes',
-                    'min_events': 3,
-                    'max_time_window_hours': 12
+                    'min_events': 2,
+                    'max_time_window_hours': 24
                 },
                 # Pattern 2: Data theft
                 {
                     'sequence': ['unusual_login', 'sensitive_access', 'external_connection'],
                     'description': 'Unusual login accessing sensitive files with external connection',
-                    'min_events': 3,
-                    'max_time_window_hours': 6
+                    'min_events': 2,
+                    'max_time_window_hours': 24
                 }
             ],
             'amplification_factor': 1.8
@@ -161,16 +161,16 @@ class EventChainDetector:
             tags.add('off_hours_access')
             tags.add('off_hours')
         
-        # Mass file access (>20 files)
+        # Mass file access (>10 files - relaxed)
         if 'file_access_count' in event:
-            if event['file_access_count'] > 20:
+            if event['file_access_count'] > 10:
                 tags.add('mass_file_access')
-            if event['file_access_count'] > 50:
+            if event['file_access_count'] > 25:
                 tags.add('mass_file_enum')
         
-        # Large upload (>50 MB)
+        # Large upload (>20 MB - relaxed)
         if 'upload_size_mb' in event:
-            if event['upload_size_mb'] > 50:
+            if event['upload_size_mb'] > 20:
                 tags.add('large_upload')
             if event['upload_size_mb'] < 1:
                 tags.add('minimal_upload')
@@ -214,8 +214,8 @@ class EventChainDetector:
             if event['risk_level'] == 'High':
                 tags.add('high_risk_action')
         
-        # Catch-all for any high-risk indicators
-        if event.get('anomaly_score', 0) < -0.6:
+        # Catch-all for any high-risk indicators (relaxed threshold)
+        if event.get('anomaly_score', 0) < -0.4:
             tags.add('high_risk_action')
         
         return tags

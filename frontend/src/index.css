@@ -1,0 +1,292 @@
+@import "tailwindcss";
+
+/* Custom color palette */
+:root {
+  /* GitHub Dark theme colors */
+  --color-vortex-dark: #0d1117;
+  /* GitHub canvas background */
+  --color-vortex-darker: #010409;
+  /* GitHub inset background */
+  --color-vortex-accent: #1f6feb;
+  /* GitHub blue accent */
+  --color-vortex-accent-hover: #388bfd;
+  --color-risk-critical: #fb2c36;
+  --color-risk-high: #ff6900;
+  --color-risk-medium: #f0b100;
+  --color-risk-low: #00c950;
+  --color-text-primary: #c9d1d9;
+  --color-text-secondary: #8b949e;
+  --color-border: #30363d;
+}
+
+body {
+  background-color: var(--color-vortex-darker);
+  color: #f3f4f6;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Component styles */
+.card {
+  background-color: var(--color-vortex-dark);
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--color-border);
+  padding: 1.25rem;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+}
+
+.card:hover {
+  border-color: rgba(31, 111, 235, 0.4);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+}
+
+/* Glassmorphism Variant */
+.card-glass {
+  background: rgba(13, 17, 23, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.card-glass:hover {
+  background: rgba(13, 17, 23, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Cyber Variant with Side Ribbon */
+.card-cyber {
+  position: relative;
+  overflow: hidden;
+}
+
+.card-cyber::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(to bottom, var(--color-vortex-accent), transparent);
+  opacity: 0.6;
+}
+
+.card-cyber-red::before {
+  background: linear-gradient(to bottom, var(--color-risk-critical), transparent);
+}
+
+/* Floating Badge Fix */
+.floating-pill {
+  position: absolute;
+  top: 0;
+  left: 1.5rem;
+  transform: translateY(-50%);
+  background: var(--color-vortex-darker);
+  border: 1px solid var(--color-border);
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  z-index: 10;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+
+.btn-primary {
+  background-color: var(--color-vortex-accent);
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: var(--color-vortex-accent-hover);
+}
+
+.btn-secondary {
+  background-color: #21262d;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background-color: #30363d;
+  border-color: #8b949e;
+}
+
+.badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-critical {
+  background-color: var(--color-risk-critical);
+  color: white;
+}
+
+.badge-high {
+  background-color: var(--color-risk-high);
+  color: white;
+}
+
+.badge-medium {
+  background-color: var(--color-risk-medium);
+  color: #111827;
+}
+
+.badge-low {
+  background-color: var(--color-risk-low);
+  color: white;
+}
+
+.input-field {
+  background-color: #1c2128;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  padding: 0.4rem 2rem 0.4rem 0.75rem;
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238b949e' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 1rem;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-vortex-accent);
+  box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.2);
+}
+
+select.input-field {
+  cursor: pointer;
+}
+
+input.input-field {
+  background-image: none;
+  padding-right: 0.75rem;
+}
+
+/* Minimalist Scroll Indicator for Content Areas */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-vortex-accent);
+}
+
+/* Base scrollbar reset */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* Pulse animations for critical alerts */
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+
+.pulse-red {
+  background-color: var(--color-risk-critical);
+  animation: pulse-glow 2s infinite;
+}
+
+@keyframes pulse-border {
+
+  0%,
+  100% {
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+
+  50% {
+    border-color: rgba(239, 68, 68, 1);
+  }
+}
+
+.pulse-border {
+  animation: pulse-border 2s infinite;
+}
+
+/* Custom scrollbar for alert feed - uses global minimal style */
+.custom-scrollbar {
+  scrollbar-width: thin;
+}
+
+/* Hide scrollbar completely but retain scrolling functionality */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

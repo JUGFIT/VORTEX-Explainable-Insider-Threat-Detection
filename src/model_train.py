@@ -40,7 +40,10 @@ MODEL_FEATURES = [
     'upload_size_mb_zscore',
     'total_files_24h_zscore',
     'avg_upload_24h_zscore',
-    'event_count_24h_zscore'
+    'event_count_24h_zscore',
+    'is_unusual_login',
+    'privilege_escalation',
+    'admin_action'
 ]
 
 def load_and_prepare_data(filepath):
@@ -170,10 +173,24 @@ def model_training_pipeline():
     # Save metrics to JSON file
     save_metrics(metrics)
     
-    # Save anomaly scores back to processed data
+    # Save anomaly scores and categorize risk levels for persistence
     df_full['anomaly_score'] = -anomaly_scores
+    
+    # Categorize risk levels based on quantiles
+    q_critical = df_full['anomaly_score'].quantile(0.99)
+    q_high = df_full['anomaly_score'].quantile(0.95)
+    q_med = df_full['anomaly_score'].quantile(0.80)
+    
+    def categorize_risk(score):
+        if score >= q_critical: return 'Critical'
+        if score >= q_high: return 'High'
+        if score >= q_med: return 'Medium'
+        return 'Low'
+        
+    df_full['risk_level'] = df_full['anomaly_score'].apply(categorize_risk)
+    
     df_full.to_csv(PROCESSED_DATA_FILE, index=False)
-    print(f"✅ Updated processed data with anomaly scores: {PROCESSED_DATA_FILE}")
+    print(f"✅ Updated processed data with anomaly scores and risk levels: {PROCESSED_DATA_FILE}")
     
     print("\n" + "=" * 50)
     print("🎉 MODEL TRAINING PIPELINE COMPLETED SUCCESSFULLY")

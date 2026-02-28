@@ -79,6 +79,11 @@ FEATURE_NAME_MAP = {
     'sensitive_file_access_zscore': 'Abnormal Sensitive Access',
     'external_ip_connection_zscore': 'Abnormal External Connection',
     'failed_login_attempts_zscore': 'Abnormal Failed Login Pattern',
+    
+    # Behavioral Indicators
+    'is_unusual_login': 'Unusual Login Location/Method',
+    'privilege_escalation': 'Privilege Escalation Attempt',
+    'admin_action': 'Administrative Action',
 }
 
 def get_human_readable_feature(feature_name: str) -> str:
@@ -461,12 +466,14 @@ def generate_shap_explanations(df, model, event_id=None):
         
         # Find the event to explain
         if event_id is not None:
-            event_data = df[df['event_id'] == event_id]
+            # Cast column and search ID to string for robust matching
+            event_id_str = str(event_id)
+            event_data = df[df['event_id'].astype(str) == event_id_str]
             if event_data.empty:
                 logger.error(f"Event ID {event_id} not found in dataset.")
                 return None
             
-            X_explain = event_data[MODEL_FEATURES]
+            X_explain = X.loc[event_data.index]
             logger.info(f"Generating explanation for Event ID: {event_id}")
         
         else:
@@ -475,11 +482,14 @@ def generate_shap_explanations(df, model, event_id=None):
                 logger.error("anomaly_score column not found. Run model training first.")
                 return None
                 
-            highest_risk_event = df.sort_values(by='anomaly_score', ascending=False).iloc[0]
-            event_id = highest_risk_event['event_id']
-            X_explain = highest_risk_event[MODEL_FEATURES].to_frame().T 
+            highest_risk_event_idx = df.sort_values(by='anomaly_score', ascending=False).index[0]
+            event_id = df.loc[highest_risk_event_idx, 'event_id']
+            X_explain = X.loc[[highest_risk_event_idx]]
 
             logger.info(f"No event_id specified. Explaining highest risk event: {event_id}")
+
+        # Final safety check on X_explain (ensure no NaNs reach the explainer)
+        X_explain = X_explain.fillna(0)
 
         # Calculate SHAP values
         logger.info("Calculating SHAP values...")
@@ -498,16 +508,27 @@ def generate_shap_explanations(df, model, event_id=None):
             base_value = float(base_value[0])
         else:
             base_value = float(base_value)
+            
+        # Final NaN check for base_value
+        if not np.isfinite(base_value):
+            base_value = 0.0
         
         # Create a structured list of contributions
         for i, feature in enumerate(MODEL_FEATURES):
+            # Resolve potential NaN issues for JSON serialization
+            val = float(X_explain.iloc[0][feature])
+            contrib = float(shap_values[0][i])
+            
+            if not np.isfinite(val): val = 0.0
+            if not np.isfinite(contrib): contrib = 0.0
+            
             # In Isolation Forest, negative SHAP values indicate increased anomaly risk
-            is_increasing_risk = shap_values[0][i] < 0
+            is_increasing_risk = contrib < 0
             
             explanation_data.append({
                 'feature': feature,
-                'value_at_risk': float(X_explain.iloc[0][feature]),
-                'shap_contribution': float(shap_values[0][i]), 
+                'value_at_risk': val,
+                'shap_contribution': contrib, 
                 'is_high_risk_contributor': bool(is_increasing_risk)
             })
         
@@ -543,12 +564,14 @@ def generate_shap_explanations(df, model, event_id=None):
         return None
 
 
-def xai_pipeline(event_id=None):
+def xai_pipeline(event_id=None, df=None, model=None):
     """
     Main pipeline function to run the XAI explanation.
     
     Args:
         event_id: Optional event ID to explain. If None, explains highest risk event.
+        df: Optional pre-loaded DataFrame
+        model: Optional pre-loaded Model
         
     Returns:
         Dictionary with explanation details or None if failed
@@ -559,8 +582,12 @@ def xai_pipeline(event_id=None):
         logger.info("Starting XAI Explanation Pipeline")
         logger.info("=" * 60)
         
-        # Load data and model
-        df, model = load_data_and_model()
+        # Load data and model if not provided
+        if df is None or model is None:
+            df_disk, model_disk = load_data_and_model()
+            df = df if df is not None else df_disk
+            model = model if model is not None else model_disk
+
         if df is None or model is None:
             logger.error("Failed to load data or model. Exiting pipeline.")
             return None

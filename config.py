@@ -23,7 +23,7 @@ MODEL_FILE = str(MODEL_DIR / 'isolation_forest_model.pkl')
 
 # --- Data Generation Parameters ---
 NUM_USERS = 50
-NUM_DAYS = 30
+NUM_DAYS = 365
 BASE_EVENTS_PER_DAY = 15
 ANOMALY_RATE = 0.03  # 3% anomaly rate
 

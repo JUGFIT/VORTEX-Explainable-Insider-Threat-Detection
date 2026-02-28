@@ -37,7 +37,7 @@ def generate_synthetic_logs():
     user_ids = [f"user_{i:03d}" for i in range(NUM_USERS)]
     
     # 2. Define Time Range
-    start_date = datetime(2025, 11, 1)
+    start_date = datetime(2025, 1, 1)
     # The end date is determined by the number of days specified in config
     # end_date = start_date + timedelta(days=NUM_DAYS) # Not strictly needed here
     
@@ -86,6 +86,9 @@ def generate_synthetic_logs():
                     'sensitive_file_access': 0,
                     'upload_size_mb': 0.0,
                     'external_ip_connection': 0,
+                    'is_unusual_login': 0,
+                    'privilege_escalation': 0,
+                    'admin_action': 0,
                     'anomaly_flag_truth': 0 # Use a clear name for the ground truth label
                 }
                 

@@ -104,8 +104,13 @@ class RiskTrajectory:
         
         self.events['timestamp'] = pd.to_datetime(self.events['timestamp'])
         
+        # Use the dataset's own latest timestamp as "now" so that
+        # decay and lookback windows work correctly regardless of when
+        # the server is running relative to the data's date range.
+        self.data_max_ts = self.events['timestamp'].max()
+        now = self.data_max_ts
+        
         # Calculate days ago for each event
-        now = datetime.now()
         self.events['days_ago'] = (now - self.events['timestamp']).dt.total_seconds() / 86400
         
         # Calculate decay factor for each event
@@ -190,14 +195,23 @@ class RiskTrajectory:
         if len(self.events) < 5:  # Need minimum events to detect trend
             self.is_escalating = False
             self.escalation_details = {
-                'reason': 'Insufficient data (< 5 events)',
-                'recent_avg': 0.0,
-                'previous_avg': 0.0,
-                'percent_change': 0.0
+                'recent_7d_avg': 0.0,
+                'previous_7d_avg': 0.0,
+                'percent_change': 0.0,
+                'recent_event_count': 0,
+                'previous_event_count': 0,
+                'threshold_met': False,
+                'severity': 'None',
+                'reason': 'Insufficient data (< 5 events)'
             }
+            # Use the data's own max timestamp instead of real-time now
+            # so windows work correctly for synthetic/historical data
+            now = getattr(self, 'data_max_ts', pd.Timestamp(datetime.now()))
             return
         
-        now = datetime.now()
+        # Use the data's own max timestamp instead of real-time now
+        # so windows work correctly for synthetic/historical data
+        now = getattr(self, 'data_max_ts', pd.Timestamp(datetime.now()))
         
         # Recent events (last 7 days)
         recent_cutoff = now - timedelta(days=7)
@@ -214,10 +228,14 @@ class RiskTrajectory:
         if len(recent_events) == 0:
             self.is_escalating = False
             self.escalation_details = {
-                'reason': 'No recent events',
-                'recent_avg': 0.0,
-                'previous_avg': 0.0,
-                'percent_change': 0.0
+                'recent_7d_avg': 0.0,
+                'previous_7d_avg': 0.0,
+                'percent_change': 0.0,
+                'recent_event_count': 0,
+                'previous_event_count': len(previous_events),
+                'threshold_met': False,
+                'severity': 'None',
+                'reason': 'No recent events'
             }
             return
         
@@ -230,18 +248,22 @@ class RiskTrajectory:
             previous_avg = float(self.events['anomaly_score'].mean()) if 'anomaly_score' in self.events.columns else 0.0
         
         # Escalation detection
-        # Risk scores are negative (more negative = higher risk)
-        # Escalation: recent_avg < previous_avg (more negative)
+        # Scores are negative (Isolation Forest): more positive = more anomalous.
+        # Escalating if recent average is at least 10% higher (less negative / more positive)
+        # than the previous average, using absolute comparison to handle negatives correctly.
+        if previous_avg < 0:
+            # previous is negative: escalating if recent is less negative by >=10%
+            self.is_escalating = recent_avg > (previous_avg * 0.90)
+        else:
+            # previous is near zero or positive: escalating if recent is 10% higher
+            self.is_escalating = recent_avg > (previous_avg * 1.10)
         
-        if previous_avg != 0:
-            percent_change = ((recent_avg - previous_avg) / abs(previous_avg)) * 100
+        # Calculate percent change
+        if previous_avg > 0:
+            percent_change = ((recent_avg - previous_avg) / previous_avg) * 100
         else:
             percent_change = 0.0
-        
-        # Escalating if recent is at least 30% more negative
-        # AND recent average is below -0.3 (at least medium risk)
-        self.is_escalating = (recent_avg < previous_avg * 1.3) and (recent_avg < -0.3)
-        
+            
         self.escalation_details = {
             'recent_7d_avg': round(recent_avg, 4),
             'previous_7d_avg': round(previous_avg, 4),
@@ -253,17 +275,26 @@ class RiskTrajectory:
         }
     
     def _categorize_escalation_severity(self, recent_avg: float, previous_avg: float) -> str:
-        """Categorize escalation severity."""
-        if recent_avg >= -0.3:
+        """Categorize escalation severity based on relative change between periods."""
+        if not self.is_escalating:
             return 'None'
         
-        ratio = abs(recent_avg / previous_avg) if previous_avg != 0 else 1.0
+        # Calculate how much more anomalous recent period is vs previous
+        # Works for both negative and positive score ranges
+        if previous_avg < 0 and recent_avg < 0:
+            # Both negative: percent improvement toward zero (less negative = more risky)
+            change_ratio = abs(recent_avg) / abs(previous_avg)  # < 1 means less negative = more risky
+            pct_change = (1 - change_ratio) * 100  # positive = escalating
+        elif previous_avg == 0:
+            pct_change = 100.0 if recent_avg > 0 else 0.0
+        else:
+            pct_change = ((recent_avg - previous_avg) / abs(previous_avg)) * 100
         
-        if ratio >= 2.0:
+        if pct_change >= 40:
             return 'Critical'
-        elif ratio >= 1.5:
+        elif pct_change >= 25:
             return 'High'
-        elif ratio >= 1.3:
+        elif pct_change >= 10:
             return 'Medium'
         else:
             return 'Low'
@@ -286,10 +317,10 @@ class RiskTrajectory:
         first_half_avg = np.mean(cumulative_risks[:mid_point])
         second_half_avg = np.mean(cumulative_risks[mid_point:])
         
-        # Trend determination (risk is negative, so more negative = worse)
-        if second_half_avg < first_half_avg * 1.2:  # 20% more negative
+        # Trend determination (risk is positive, so higher = worse)
+        if second_half_avg > first_half_avg * 1.2:  # 20% increase in risk
             self.trend = 'escalating'
-        elif second_half_avg > first_half_avg * 0.8:  # 20% less negative
+        elif second_half_avg < first_half_avg * 0.8:  # 20% decrease in risk
             self.trend = 'declining'
         else:
             self.trend = 'stable'
@@ -310,13 +341,36 @@ class RiskTrajectory:
         if lookback_days is None:
             return self.trajectory_data
         
-        # Filter to lookback period
-        cutoff_date = (datetime.now() - timedelta(days=lookback_days)).date()
+        # Filter to lookback period — relative to the dataset's own max timestamp
+        # (not datetime.now()) so windows work correctly for historical datasets.
+        reference_ts = getattr(self, 'data_max_ts', None)
+        if reference_ts is None:
+            reference_ts = pd.Timestamp(datetime.now())
+        cutoff_date = (reference_ts - timedelta(days=lookback_days)).date()
         
         filtered = [
             entry for entry in self.trajectory_data
             if pd.to_datetime(entry['date']).date() >= cutoff_date
         ]
+        
+        # If we have only 1 point in the filtered window (common for new injections),
+        # add a "ghost" point from the previous day with 0 risk to help Recharts
+        # draw a visible line/area.
+        if len(filtered) == 1 and len(self.trajectory_data) > 1:
+            idx = self.trajectory_data.index(filtered[0])
+            if idx > 0:
+                # Add the preceding point regardless of cutoff
+                filtered.insert(0, self.trajectory_data[idx-1])
+            else:
+                # Create a zero-stats point for the day before
+                prev_date = pd.to_datetime(filtered[0]['date']) - timedelta(days=1)
+                ghost = filtered[0].copy()
+                ghost['date'] = prev_date.strftime('%Y-%m-%d')
+                ghost['events'] = 0
+                ghost['avg_risk'] = 0.0
+                ghost['cumulative_risk'] = 0.0
+                ghost['running_cumulative_risk'] = 0.0
+                filtered.insert(0, ghost)
         
         return filtered
     
@@ -343,10 +397,10 @@ class RiskTrajectory:
         return {
             'user_id': self.user_id,
             'current_cumulative_risk': float(self.cumulative_risk),
-            'trend': self.trend,
+            'trend': str(self.trend),
             'is_escalating': bool(self.is_escalating),
             'event_count': int(len(self.events)),
-            'escalation_severity': self.escalation_details.get('severity', 'None') if self.escalation_details else 'None'
+            'escalation_severity': str(self.escalation_details.get('severity', 'None') if self.escalation_details else 'None')
         }
 
 
