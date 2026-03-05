@@ -38,8 +38,6 @@ def generate_synthetic_logs():
     
     # 2. Define Time Range
     start_date = datetime(2025, 1, 1)
-    # The end date is determined by the number of days specified in config
-    # end_date = start_date + timedelta(days=NUM_DAYS) # Not strictly needed here
     
     all_events = []
     
@@ -47,77 +45,103 @@ def generate_synthetic_logs():
 
     # --- Data Generation Loop ---
     for user_id in user_ids:
-        # Simulate a personalized baseline (e.g., slightly higher/lower file access)
-        user_baseline_events = int(np.random.normal(BASE_EVENTS_PER_DAY, 1))
+        # Simulate a personalized baseline
+        user_baseline_events = int(np.random.normal(BASE_EVENTS_PER_DAY, 5))
+        user_baseline_events = max(10, user_baseline_events) # Consistent minimum
 
         for day in range(NUM_DAYS):
             current_date = start_date + timedelta(days=day)
             
-            # Use random variation for event count based on user baseline
-            num_events = int(np.random.normal(user_baseline_events, 2))
+            # --- High Variability Event Count ---
+            # Using a mix of distributions for "spikes"
+            if random.random() < 0.1: # 10% chance of a "busy day" spike
+                num_events = random.randint(35, 60)
+            else:
+                num_events = int(np.random.normal(user_baseline_events, 4))
             
-            for _ in range(max(1, num_events)):
-                # Determine if this event should be an anomaly
-                is_anomaly = random.random() < ANOMALY_RATE
+            for _ in range(max(5, num_events)):
+                # Determine if this event should be "suspicious" (for off-hours/alerting)
+                is_suspicious = False
                 
-                # --- Timestamp Generation ---
-                if is_anomaly:
-                    # Anomaly: Time outside normal hours (e.g., 8 PM to 7 AM)
-                    if random.random() < 0.7:
-                        # Deep night window
-                        hour = random.choice(list(range(20, 24)) + list(range(0, 7)))
-                    else:
-                        # Immediate post-work/pre-work unusual time
-                        hour = random.choice(list(range(7, 8)) + list(range(18, 20)))
+                # --- Behavior Feature Generation (Base) ---
+                event = {
+                    'event_id': None, # Set later
+                    'timestamp': None, # Set later
+                    'user_id': user_id,
+                    'file_access_count': random.randint(1, 15),
+                    'sensitive_file_access': 0,
+                    'upload_size_mb': random.uniform(0.1, 8.0),
+                    'external_ip_connection': random.choice([0, 0, 0, 1]),
+                    'is_unusual_login': 0,
+                    'privilege_escalation': 0,
+                    'admin_action': 0,
+                    'explanation': '',
+                    'anomaly_flag_truth': 0
+                }
+
+                # --- Specialized Insider Logic ---
+                if user_id == "user_012": # SMART
+                    # Smart user: Stealthy periodic activity
+                    is_anomaly_day = (day % 15 == 0)
+                    if is_anomaly_day and random.random() < 0.3:
+                        event['sensitive_file_access'] = 1
+                        event['file_access_count'] = random.randint(20, 30)
+                        event['explanation'] = 'Discovery: Target identification in sensitive silos'
+                        event['anomaly_flag_truth'] = 1
+                        is_suspicious = True
+                    elif day > 70 and random.random() < 0.1:
+                        event['upload_size_mb'] = random.uniform(15, 25)
+                        event['explanation'] = 'Action: Slow exfiltration of encrypted blobs'
+                        event['anomaly_flag_truth'] = 1
+                        is_suspicious = True
+
+                elif user_id == "user_024": # AVERAGE
+                    # Consistently elevated
+                    if random.random() < 0.15:
+                        event['file_access_count'] = random.randint(25, 45)
+                        event['sensitive_file_access'] = random.choice([0, 1])
+                        event['upload_size_mb'] = random.uniform(10, 30)
+                        event['explanation'] = 'Average risk: Sustained elevated activity'
+                        event['anomaly_flag_truth'] = 1
+                        is_suspicious = True if random.random() < 0.5 else False
+
+                elif user_id == "user_048": # DUMB
+                    # High volume bursts
+                    if random.random() < 0.08:
+                        event['file_access_count'] = random.randint(200, 500)
+                        event['sensitive_file_access'] = random.randint(10, 30)
+                        event['upload_size_mb'] = random.uniform(2000, 5000)
+                        event['admin_action'] = random.choice([0, 1])
+                        event['explanation'] = 'Critical: Massive data exfiltration/harvesting spike'
+                        event['anomaly_flag_truth'] = 1
+                        is_suspicious = True
+
+                # --- Regular User Logic (5-10% False Positive Rate) ---
                 else:
-                    # Normal: Time within normal hours
+                    if random.random() < 0.08: # ~8% rate
+                        if random.random() < 0.6: 
+                            is_suspicious = True
+                            event['is_unusual_login'] = 1
+                            event['explanation'] = 'Likely False Positive: Remote login during maintenance'
+                        else:
+                            event['upload_size_mb'] = random.uniform(50, 200)
+                            event['explanation'] = 'Likely False Positive: Large legitimate cloud sync'
+                        event['anomaly_flag_truth'] = 0
+
+                # --- Final Timestamp and ID Generation ---
+                if is_suspicious:
+                    # Off-hours: 8 PM to 6 AM
+                    hour = random.choice(list(range(20, 24)) + list(range(0, 6)))
+                else:
+                    # Normal: 8 AM to 6 PM
                     hour = random.randint(NORMAL_START_TIME.hour, NORMAL_END_TIME.hour)
                 
                 minute = random.randint(0, 59)
                 second = random.randint(0, 59)
-                timestamp = current_date.replace(hour=hour, minute=minute, second=second)
+                ts = current_date.replace(hour=hour, minute=minute, second=second)
                 
-                # --- Behavior Feature Generation ---
-                event = {
-                    'event_id': f"{user_id}_{timestamp.timestamp()}", # Unique ID for later lookup
-                    'timestamp': timestamp,
-                    'user_id': user_id,
-                    'file_access_count': 0,
-                    'sensitive_file_access': 0,
-                    'upload_size_mb': 0.0,
-                    'external_ip_connection': 0,
-                    'is_unusual_login': 0,
-                    'privilege_escalation': 0,
-                    'admin_action': 0,
-                    'anomaly_flag_truth': 0 # Use a clear name for the ground truth label
-                }
-                
-                if is_anomaly:
-                    # Scenario 1: Data Exfiltration (High upload + Sensitive access)
-                    if random.random() < 0.4:
-                        event['file_access_count'] = random.randint(20, 50) 
-                        event['sensitive_file_access'] = 1                 
-                        event['upload_size_mb'] = np.random.uniform(500, 2000) 
-                        event['anomaly_flag_truth'] = 1
-                    
-                    # Scenario 2: System Reconnaissance (High activity outside hours)
-                    elif random.random() < 0.7:
-                        # Keep time unusual (from timestamp logic) but activity high
-                        event['file_access_count'] = random.randint(30, 80) 
-                        event['upload_size_mb'] = np.random.uniform(0.1, 5)    
-                        event['anomaly_flag_truth'] = 1
-
-                    # Scenario 3: External Access
-                    else:
-                        event['external_ip_connection'] = 1
-                        event['upload_size_mb'] = np.random.uniform(10, 50)
-                        event['anomaly_flag_truth'] = 1
-                
-                # Normal behavior logic 
-                else:
-                    event['file_access_count'] = random.randint(1, 10)
-                    event['upload_size_mb'] = np.random.uniform(0.1, 5)
-                    event['external_ip_connection'] = random.choice([0, 0, 0, 1])
+                event['timestamp'] = ts
+                event['event_id'] = f"{user_id}_{ts.timestamp()}_{random.randint(1000, 9999)}"
                 
                 all_events.append(event)
     

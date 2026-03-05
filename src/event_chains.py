@@ -36,51 +36,51 @@ class EventChainDetector:
             'name': 'Data Exfiltration Attack',
             'severity': 'Critical',
             'patterns': [
-                # Pattern 1: Classic exfiltration
+                # Pattern 1: High-intensity exfiltration
                 {
-                    'sequence': ['off_hours_access', 'mass_file_access', 'large_upload'],
-                    'description': 'Off-hours access followed by mass file access and large upload',
-                    'min_events': 2,
+                    'sequence': ['mass_file_access', 'large_upload', 'sensitive_access'],
+                    'description': 'Concurrent mass file access, massive upload, and sensitive file access',
+                    'min_events': 3,
                     'max_time_window_hours': 24
                 },
-                # Pattern 2: Stealthy exfiltration
+                # Pattern 2: Stealthy exfiltration (multi-stage)
                 {
                     'sequence': ['sensitive_file_access', 'external_connection', 'repeated_uploads'],
-                    'description': 'Sensitive file access with external connection and repeated uploads',
-                    'min_events': 2,
+                    'description': 'Discovery of sensitive files followed by external connection and uploads',
+                    'min_events': 3,
                     'max_time_window_hours': 48
                 },
-                # Pattern 3: USB exfiltration
+                # Pattern 3: USB exfiltration (High severity, 3 events)
                 {
                     'sequence': ['privilege_escalation', 'mass_file_access', 'usb_usage'],
-                    'description': 'Privilege escalation, mass file access, then USB usage',
+                    'description': 'Privilege escalation with mass harvesting to local media',
                     'min_events': 3,
                     'max_time_window_hours': 4
                 }
             ],
-            'amplification_factor': 2.0
+            'amplification_factor': 2.5
         },
         
         'insider_threat': {
             'name': 'Insider Threat Pattern',
             'severity': 'High',
             'patterns': [
-                # Pattern 1: Revenge/sabotage
+                # Pattern 1: Sophisticated Discovery (Smart user logic)
                 {
-                    'sequence': ['off_hours', 'privilege_use', 'system_modification'],
-                    'description': 'Off-hours activity with privilege abuse and system changes',
+                    'sequence': ['login', 'sensitive_access', 'discovery'],
+                    'description': 'Targeted discovery in sensitive silos',
                     'min_events': 2,
-                    'max_time_window_hours': 24
+                    'max_time_window_hours': 96
                 },
                 # Pattern 2: Data theft
                 {
                     'sequence': ['unusual_login', 'sensitive_access', 'external_connection'],
                     'description': 'Unusual login accessing sensitive files with external connection',
-                    'min_events': 2,
+                    'min_events': 3,
                     'max_time_window_hours': 24
                 }
             ],
-            'amplification_factor': 1.8
+            'amplification_factor': 2.0
         },
         
         'reconnaissance': {
@@ -142,40 +142,41 @@ class EventChainDetector:
         self.detected_chains = []
         self._detect_chains()
     
-    def _classify_event(self, event: pd.Series) -> Set[str]:
-        """
-        Classify an event based on its characteristics.
-        
-        Returns a set of tags describing the event (e.g., 'off_hours', 'mass_file_access')
-        """
+    def _classify_event(self, event: Dict) -> Set[str]:
+        """Classify an event based on its characteristics."""
         tags = set()
+        # Base activity marker
+        tags.add('login')
         
         # Off-hours access (before 6 AM or after 10 PM)
-        if 'hour_of_day' in event:
-            hour = event['hour_of_day']
-            if hour < 6 or hour >= 22:
+        hour = event.get('hour_of_day')
+        is_weekend = event.get('day_of_week', 0) >= 5
+        if hour is not None:
+            if hour < 6 or hour >= 22 or is_weekend:
                 tags.add('off_hours_access')
                 tags.add('off_hours')
         
-        if event.get('is_off_hours', False):
-            tags.add('off_hours_access')
-            tags.add('off_hours')
-        
-        # Mass file access (>10 files - relaxed)
-        if 'file_access_count' in event:
-            if event['file_access_count'] > 10:
-                tags.add('mass_file_access')
-            if event['file_access_count'] > 25:
+        # Mass file access (Detecting stealthy spikes > 20 files)
+        fac = event.get('file_access_count', 0)
+        if fac > 20: 
+            tags.add('mass_file_access')
+            if fac > 100:
                 tags.add('mass_file_enum')
         
-        # Large upload (>20 MB - relaxed)
-        if 'upload_size_mb' in event:
-            if event['upload_size_mb'] > 20:
-                tags.add('large_upload')
-            if event['upload_size_mb'] < 1:
-                tags.add('minimal_upload')
-            if event['upload_size_mb'] > 10:  # Multiple uploads
-                tags.add('repeated_uploads')
+        # Large upload (Stealthy blobs > 15 MB)
+        up_mb = event.get('upload_size_mb', 0)
+        if up_mb > 15:
+            tags.add('large_upload')
+            tags.add('repeated_uploads')
+            if up_mb > 1000:
+                tags.add('massive_exfiltration')
+        elif up_mb < 2 and up_mb > 0:
+            tags.add('minimal_upload')
+        
+        # Discovery marker (Smart Insider specific)
+        explanation = event.get('explanation')
+        if explanation and not pd.isna(explanation) and 'discovery' in str(explanation).lower():
+            tags.add('discovery')
         
         # Sensitive file access
         if event.get('sensitive_file_access', 0) > 0:
@@ -200,9 +201,9 @@ class EventChainDetector:
             tags.add('unusual_login')
         
         # Weekend access
-        if 'day_of_week' in event:
-            if event['day_of_week'] >= 5:  # Saturday or Sunday
-                tags.add('weekend_access')
+        dow = event.get('day_of_week')
+        if dow is not None and dow >= 5:  # Saturday or Sunday
+            tags.add('weekend_access')
         
         # System access (admin actions, etc.)
         if event.get('admin_action', False):
@@ -210,9 +211,9 @@ class EventChainDetector:
             tags.add('system_modification')
         
         # High risk event
-        if 'risk_level' in event:
-            if event['risk_level'] == 'High':
-                tags.add('high_risk_action')
+        risk = event.get('risk_level')
+        if risk == 'High' or risk == 'Critical':
+            tags.add('high_risk_action')
         
         # Catch-all for any high-risk indicators (relaxed threshold)
         if event.get('anomaly_score', 0) < -0.4:
@@ -229,17 +230,26 @@ class EventChainDetector:
         if len(self.events) < 2:
             return  # Need at least 2 events to form a chain
         
-        # Classify all events
+        # Prepare data for classification
+        cols = ['timestamp', 'event_id', 'anomaly_score', 'risk_level', 'hour_of_day', 'is_off_hours', 
+                'file_access_count', 'upload_size_mb', 'sensitive_file_access', 'external_ip_connection', 
+                'uses_usb', 'privilege_escalation', 'is_unusual_login', 'day_of_week', 'admin_action']
+        
+        # Filter available columns
+        available_cols = [c for c in cols if c in self.events.columns]
+        data_dicts = self.events[available_cols].to_dict('records')
+        indices = self.events.index.tolist()
+        
         event_tags = []
-        for idx, event in self.events.iterrows():
-            tags = self._classify_event(event)
+        for i, row_dict in enumerate(data_dicts):
+            tags = self._classify_event(row_dict)
             event_tags.append({
-                'index': idx,
-                'timestamp': event.get('timestamp', datetime.now()),
-                'event_id': event.get('event_id', f'evt_{idx}'),
+                'index': indices[i],
+                'timestamp': row_dict.get('timestamp', datetime.now()),
+                'event_id': row_dict.get('event_id', f'evt_{i}'),
                 'tags': tags,
-                'anomaly_score': event.get('anomaly_score', 0),
-                'risk_level': event.get('risk_level', 'Low')
+                'anomaly_score': row_dict.get('anomaly_score', 0),
+                'risk_level': row_dict.get('risk_level', 'Low')
             })
         
         # Look for pattern matches
@@ -437,7 +447,10 @@ class EventChainDetector:
                 'chains_by_severity': {},
                 'chains_by_type': {},
                 'highest_risk': 0.0,
-                'most_dangerous_pattern': None
+                'most_dangerous_pattern': None,
+                'critical_count': 0,
+                'high_count': 0,
+                'medium_count': 0
             }
         
         chains_by_severity = defaultdict(int)
@@ -533,6 +546,7 @@ class ChainDetectorManager:
                 'total_chains': 0,
                 'critical_chains': 0,
                 'high_chains': 0,
+                'medium_chains': 0,
                 'users_with_chains': 0,
                 'avg_chains_per_user': 0.0
             }

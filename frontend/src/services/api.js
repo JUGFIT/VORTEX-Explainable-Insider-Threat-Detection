@@ -18,6 +18,11 @@ export const getRiskEvents = async (params = {}) => {
     return response.data;
 };
 
+export const getEventById = async (eventId) => {
+    const response = await api.get(`/risks/event/${encodeURIComponent(eventId)}`);
+    return response.data;
+};
+
 export const getRiskCounts = async (params = {}) => {
     try {
         const response = await api.get('/risks/count', { params });

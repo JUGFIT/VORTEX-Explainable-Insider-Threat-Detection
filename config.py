@@ -19,13 +19,15 @@ MODEL_DIR.mkdir(exist_ok=True)
 # --- File Paths (Convert to strings for backward compatibility) ---
 RAW_DATA_FILE = str(DATA_DIR / 'raw_behavior_logs.csv')
 PROCESSED_DATA_FILE = str(DATA_DIR / 'processed_features.csv')
+PREDICTIONS_DATA_FILE = str(DATA_DIR / 'processed_features_predictions.csv')
 MODEL_FILE = str(MODEL_DIR / 'isolation_forest_model.pkl')
+DB_FILE = str(DATA_DIR / 'vortex.db')
 
 # --- Data Generation Parameters ---
 NUM_USERS = 50
-NUM_DAYS = 365
-BASE_EVENTS_PER_DAY = 15
-ANOMALY_RATE = 0.03  # 3% anomaly rate
+NUM_DAYS = 90
+BASE_EVENTS_PER_DAY = 25
+ANOMALY_RATE = 0.05  # Increased slightly for better variety
 
 # --- Feature Engineering Parameters ---
 TIME_WINDOW_HOURS = 24

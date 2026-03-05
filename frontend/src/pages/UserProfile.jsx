@@ -127,10 +127,17 @@ const UserProfile = () => {
 
         return trajectory.trajectory.map((d, i) => {
             const score = d.avg_risk ?? 0;
-            const riskPct = Math.round(((maxVal - score) / range) * 100);
-            // cumulative: higher running total = more suspicious, so map max->100
-            const cum = rawCum[i];
-            const cumulativePct = Math.round(((cum - minCum) / rangeCum) * 100);
+            // Risk %: IF score is negative for anomalies. Normal = ~0, High Risk = -0.5.
+            // Mapping: 0 -> 0%, -0.5 -> 100%
+            const riskPct = Math.max(0, Math.min(100, Math.round(Math.abs(Math.min(0, score)) * 200)));
+
+            // Cumulative: higher value = more pressure.
+            // We use a fixed range based on the distribution to avoid "jumping" line syndrome,
+            // but fallback to local max if it exceeds the expected bounds.
+            const cum = rawCum[i] ?? 0;
+            const targetMax = Math.max(5, maxCum); // Ensure we have a reasonable divisor
+            const cumulativePct = Math.round((cum / targetMax) * 100);
+
             return {
                 date: d.date,
                 riskPct,
@@ -175,99 +182,30 @@ const UserProfile = () => {
     }
 
     return (
-        <Layout title={`Agent Identity: ${userId}`}>
-            {/* Action Bar */}
-            <div className="flex items-center gap-4 mb-8">
-                <button
-                    onClick={() => navigate('/users')}
-                    className="flex items-center space-x-2 text-gray-500 hover:text-white transition-colors group"
-                >
-                    <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform" />
-                    <span className="font-bold uppercase tracking-wider text-xs">Behavioral Database</span>
-                </button>
-                <div className="ml-auto flex items-center gap-2">
-                    {refreshing && <div className="animate-spin h-4 w-4 border-2 border-vortex-accent border-t-transparent rounded-full" />}
-                    <button
-                        onClick={handleRefresh}
-                        disabled={refreshing}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-all disabled:opacity-50"
-                        title="Refresh profile data (use after threat injection)"
-                    >
-                        <Activity size={13} className={refreshing ? 'animate-spin' : ''} />
-                        Refresh
-                    </button>
-                </div>
-            </div>
-
-            {/* ── Before / After Injection Comparison Panel ── */}
-            <div className={`mb-8 rounded-2xl border p-5 ${simSnapshot ? 'border-purple-500/40 bg-purple-500/5' : 'border-gray-800 bg-gray-900/40'}`}>
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                    <div className="flex items-center gap-3">
-                        <Zap className="w-5 h-5 text-purple-400" />
+        <Layout title={`Behavioral Profile: ${userId}`} subtitle="Security Analysis & Risk Trajectory">
+            {/* Attack Chain Detected Alert Banner (Crucial for Smart Insiders) */}
+            {chainsSummary.total_chains > 0 && (
+                <div className="mb-8 p-6 rounded-2xl bg-red-500/10 border-2 border-red-500/40 flex items-center justify-between animate-pulse">
+                    <div className="flex items-center gap-5">
+                        <div className="w-12 h-12 bg-red-500 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(239,68,68,0.5)]">
+                            <ShieldAlert size={28} className="text-white" />
+                        </div>
                         <div>
-                            <h3 className="font-black text-sm uppercase tracking-widest text-gray-300">Injection Impact Tracker</h3>
-                            <p className="text-2xs text-gray-500 mt-0.5">
-                                {simSnapshot
-                                    ? 'Snapshot captured. Inject a threat, then refresh to see the delta.'
-                                    : 'Capture a baseline snapshot before injecting a threat to measure impact.'}
-                            </p>
+                            <h3 className="text-xl font-black text-white uppercase tracking-tighter">Attack Chain Detected</h3>
+                            <p className="text-sm text-red-200/80 font-bold">This user is following a multi-stage malicious sequence tracking toward data exfiltration.</p>
                         </div>
                     </div>
-                    <div className="flex gap-2">
-                        <button
-                            onClick={captureSnapshot}
-                            className="btn-secondary text-xs px-4 py-2 flex items-center gap-2"
-                            style={{ borderColor: 'rgba(168,85,247,0.4)' }}
-                        >
-                            <ShieldAlert size={14} className="text-purple-400" />
-                            {simSnapshot ? 'Re-Capture Snapshot' : 'Capture Snapshot (Before)'}
-                        </button>
-                        {simSnapshot && (
-                            <button onClick={clearSnapshot} className="btn-secondary text-xs px-3 py-2 flex items-center gap-1 text-gray-500">
-                                <X size={12} /> Clear
-                            </button>
-                        )}
-                    </div>
+                    <button
+                        onClick={() => {
+                            const chainsEl = document.getElementById('chains-section');
+                            if (chainsEl) chainsEl.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="px-6 py-2.5 bg-red-500 text-white font-black text-xs uppercase tracking-widest rounded-lg hover:bg-red-600 transition-all shadow-lg"
+                    >
+                        Analyze Chain
+                    </button>
                 </div>
-
-                {simCurrent && (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {[
-                            { label: 'Total Events', before: simSnapshot?.total_events, after: simCurrent.total_events, fmt: v => v?.toLocaleString() ?? '—', higherIsBad: true },
-                            { label: 'High Risk Events', before: simSnapshot?.high_risk_events, after: simCurrent.high_risk_events, fmt: v => v?.toLocaleString() ?? '—', higherIsBad: true },
-                            { label: 'Avg Anomaly Score', before: simSnapshot?.avg_anomaly_score, after: simCurrent.avg_anomaly_score, fmt: v => v != null ? v.toFixed(4) : '—', higherIsBad: true },
-                            { label: 'Baseline Score', before: simSnapshot?.baseline_score, after: simCurrent.baseline_score, fmt: v => v != null ? v.toFixed(4) : '—', higherIsBad: true },
-                        ].map(({ label, before, after, fmt, higherIsBad }) => {
-                            const hasBefore = before != null;
-                            const delta = hasBefore ? after - before : null;
-                            const isWorse = delta != null && (higherIsBad ? delta > 0 : delta < 0);
-                            const isBetter = delta != null && (higherIsBad ? delta < 0 : delta > 0);
-                            return (
-                                <div key={label} className="bg-gray-950/60 rounded-xl p-4 border border-gray-800 flex flex-col justify-between">
-                                    <div className="text-[10px] text-gray-500 font-black uppercase tracking-widest mb-3">{label}</div>
-                                    <div className="flex items-end justify-between">
-                                        <div className="flex flex-col">
-                                            <div className="text-[10px] text-gray-600 uppercase font-bold mb-1">{hasBefore ? 'Current (After)' : 'Current Value'}</div>
-                                            <div className={`text-xl font-black font-mono tracking-tight ${isWorse ? 'text-red-400' : isBetter ? 'text-green-400' : 'text-white'}`}>
-                                                {fmt(after)}
-                                            </div>
-                                        </div>
-                                        {hasBefore && (
-                                            <div className="flex flex-col items-end text-right">
-                                                <div className="text-[10px] text-gray-600 uppercase font-bold mb-1">Baseline</div>
-                                                <div className="text-sm font-mono text-gray-400 opacity-60 line-through mb-0.5">{fmt(before)}</div>
-                                                <div className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded bg-gray-900/80 ${isWorse ? 'text-red-400' : isBetter ? 'text-green-400' : 'text-gray-500'}`}>
-                                                    {delta > 0 ? '+' : ''}{typeof delta === 'number' && delta % 1 !== 0 ? delta.toFixed(4) : delta}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
+            )}
 
             {/* Profile Overview Header */}
 
@@ -622,7 +560,7 @@ const UserProfile = () => {
 
             {/* Attack Chains Timeline */}
             {(chainsSummary.total_chains > 0 || chains.length > 0) && (
-                <div className="mb-8">
+                <div className="mb-8" id="chains-section">
                     <div className="flex items-center gap-3 mb-6">
                         <Shield className="w-5 h-5 text-orange-500" />
                         <h3 className="text-xl font-black uppercase tracking-tighter">Detected Threat Chains</h3>
@@ -655,6 +593,7 @@ const UserProfile = () => {
                                 <tr>
                                     <th className="py-3 px-5 text-2xs font-black uppercase text-gray-500 tracking-widest">Type/Flag</th>
                                     <th className="py-3 px-5 text-2xs font-black uppercase text-gray-500 tracking-widest">Timestamp</th>
+                                    <th className="py-3 px-5 text-2xs font-black uppercase text-gray-500 tracking-widest">Explanation</th>
                                     <th className="py-3 px-5 text-2xs font-black uppercase text-gray-500 tracking-widest text-right">Risk Score</th>
                                 </tr>
                             </thead>
@@ -680,6 +619,11 @@ const UserProfile = () => {
                                             <div className="flex items-center gap-2 text-xs text-gray-400">
                                                 <Clock size={12} className="text-gray-600" />
                                                 {new Date(event.timestamp).toLocaleString('en-GB')}
+                                            </div>
+                                        </td>
+                                        <td className="py-4 px-5">
+                                            <div className={`text-xs ${event.explanation?.includes('False Positive') ? 'text-green-500 font-medium' : 'text-gray-400'}`}>
+                                                {event.explanation || 'Anomaly detected via statistical deviation'}
                                             </div>
                                         </td>
                                         <td className="py-4 px-5 text-right">

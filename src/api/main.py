@@ -29,8 +29,9 @@ try:
     PROCESSED_DATA_FILE = str(settings.PROCESSED_DATA_FILE)
     MODEL_FILE = str(settings.MODEL_FILE)
     RAW_DATA_FILE = str(settings.RAW_DATA_FILE)
+    DB_FILE = str(settings.DATA_DIR / 'vortex.db') if hasattr(settings, 'DATA_DIR') else None
 except ImportError:
-    from config import PROCESSED_DATA_FILE, MODEL_FILE, RAW_DATA_FILE
+    from config import PROCESSED_DATA_FILE, MODEL_FILE, RAW_DATA_FILE, DB_FILE
     
 # Import core components
 from src.xai_explainer import xai_pipeline, load_data_and_model
@@ -91,11 +92,12 @@ origins = [
     "http://127.0.0.1:5174",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
+    "*" # Fallback for development flexibility
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], # Using wildcard to solve intermittent local resolution issues
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,6 +115,7 @@ class RiskEvent(BaseModel):
     anomaly_score: float
     risk_level: str
     anomaly_flag_truth: int
+    explanation: Optional[str] = ""
 
 class FeatureContribution(BaseModel):
     """Schema for a single feature's SHAP contribution."""
@@ -379,7 +382,7 @@ class DataStore:
                 
                 # Phase 2A Session 3: Initialize risk trajectories
                 logger.info("Initializing risk trajectories...")
-                self.trajectory_manager = initialize_trajectory_manager(self.df)
+                self.trajectory_manager = initialize_trajectory_manager(self.df, profile_manager=self.profile_manager)
                 logger.info(f"✅ Calculated {len(self.trajectory_manager.trajectories)} risk trajectories")
                 
                 # Phase 2A Session 4: Initialize event chains
@@ -421,11 +424,41 @@ data_store = DataStore()
 # =============================================================================
 
 def load_processed_data():
-    """Load the processed dataset with anomaly scores."""
+    """Load the processed dataset from SQLite (falls back to CSV if DB doesn't exist)."""
+    # ---- Try SQLite first ----
+    if DB_FILE and os.path.exists(DB_FILE):
+        try:
+            from src.database import engine as db_engine
+            import sqlalchemy as sa
+            with db_engine.connect() as conn:
+                df = pd.read_sql_table("events", conn)
+            logger.info(f"✅ Loaded {len(df)} events from SQLite database")
+            # Re-apply risk quantile categorisation so random restarts stay consistent
+            q_low      = df['anomaly_score'].quantile(0.80)
+            q_high     = df['anomaly_score'].quantile(0.95)
+            q_critical = df['anomaly_score'].quantile(0.99)
+
+            def categorize_risk(score):
+                if score >= q_critical:
+                    return "Critical"
+                elif score >= q_high:
+                    return "High"
+                elif score >= q_low:
+                    return "Medium"
+                return "Low"
+
+            df['risk_level'] = df['anomaly_score'].apply(categorize_risk)
+            df['_dt'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = df['_dt'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            return df
+        except Exception as e:
+            logger.warning(f"SQLite load failed ({e}), falling back to CSV ...")
+
+    # ---- CSV fallback ----
     if not os.path.exists(PROCESSED_DATA_FILE):
         logger.warning(f"Processed data file not found: {PROCESSED_DATA_FILE}")
         return None
-    
+
     df = pd.read_csv(PROCESSED_DATA_FILE, low_memory=False)
     
     # Risk categorization
@@ -444,7 +477,8 @@ def load_processed_data():
             return "Low"
     
     df['risk_level'] = df['anomaly_score'].apply(categorize_risk)
-    df['timestamp'] = pd.to_datetime(df['timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
+    df['_dt'] = pd.to_datetime(df['timestamp'])
+    df['timestamp'] = df['_dt'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     logger.info(f"Loaded {len(df)} events from processed data")
     return df
@@ -585,11 +619,10 @@ def get_risk_events(
         )
         df = df[search_mask]
 
-    # Filter by date (single day)
+    # Filter by date (single day) - Optimized using pre-calculated _dt
     if date:
         try:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df = df[df['timestamp'].dt.date.astype(str) == date]
+            df = df[df['_dt'].dt.date.astype(str) == date]
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
 
@@ -602,7 +635,7 @@ def get_risk_events(
     # Validate sort_by column
     VALID_SORT_COLS = {
         'anomaly_score': 'anomaly_score',
-        'timestamp': 'timestamp',
+        'timestamp': '_dt',
         'user_id': 'user_id',
         'risk_level': 'risk_level'
     }
@@ -611,6 +644,8 @@ def get_risk_events(
     
     if sort_col == 'risk_level':
         risk_map = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+        # Use transform to avoid modifying global df or create a copy
+        df = df.copy()
         df['risk_sort'] = df['risk_level'].map(risk_map).fillna(0)
         df = df.sort_values(by=['risk_sort', 'anomaly_score'], ascending=[ascending, ascending])
         df = df.drop(columns=['risk_sort'])
@@ -627,10 +662,32 @@ def get_risk_events(
         return []
 
     alerts_list = df[[
-        'event_id', 'user_id', 'timestamp', 'anomaly_score', 'risk_level', 'anomaly_flag_truth'
-    ]].to_dict('records')
+        'event_id', 'user_id', 'timestamp', 'anomaly_score', 'risk_level', 'anomaly_flag_truth', 'explanation'
+    ]].fillna({'explanation': ''}).to_dict('records')
 
     return alerts_list
+
+@app.get("/risks/event/{event_id}", response_model=RiskEvent, summary="Get a single event by ID")
+def get_single_event(event_id: str):
+    """Returns a single risk event by its exact event_id. Fast O(1) lookup."""
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded.")
+
+    match = data_store.df[data_store.df['event_id'] == event_id]
+    if match.empty:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found.")
+
+    row = match.iloc[0]
+    return {
+        'event_id':           str(row['event_id']),
+        'user_id':            str(row['user_id']),
+        'timestamp':          str(row['timestamp']),
+        'anomaly_score':      float(row['anomaly_score']),
+        'risk_level':         str(row['risk_level']),
+        'anomaly_flag_truth': int(row['anomaly_flag_truth']),
+        'explanation':        str(row.get('explanation', '') or ''),
+    }
+
 
 @app.get("/risks/count", summary="Get Event Counts (for Before/After Injection Tracking)")
 def get_risk_counts(
@@ -781,7 +838,7 @@ def get_user_risks(user_id: str, limit: int = 10):
     # Get recent events
     recent = user_df.sort_values(by='timestamp', ascending=False).head(limit)
     recent_events = recent[[
-        'event_id', 'user_id', 'timestamp', 'anomaly_score', 'risk_level', 'anomaly_flag_truth'
+        'event_id', 'user_id', 'timestamp', 'anomaly_score', 'risk_level', 'anomaly_flag_truth', 'explanation'
     ]].to_dict('records')
     
     return UserRiskSummary(
