@@ -1,0 +1,19 @@
+{
+  "auc_roc": 0.9958230435383479,
+  "f1_anomaly": 0.7180673095847274,
+  "precision_anomaly": 0.5767467594056276,
+  "recall_anomaly": 0.9511209593326382,
+  "total_events": 253035,
+  "total_anomalies": 7672,
+  "confusion_matrix": [
+    [
+      240008,
+      5355
+    ],
+    [
+      375,
+      7297
+    ]
+  ],
+  "model_last_trained": "2026-02-18T09:39:31.516932"
+}

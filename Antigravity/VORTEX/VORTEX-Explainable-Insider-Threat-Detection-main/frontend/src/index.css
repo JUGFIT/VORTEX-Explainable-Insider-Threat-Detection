@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+/* Custom color palette */
+:root {
+  --color-vortex-dark: #0a0e27;
+  --color-vortex-darker: #060914;
+  --color-vortex-accent: #4f46e5;
+  --color-vortex-accent-hover: #4338ca;
+  --color-risk-critical: #ef4444;
+  --color-risk-high: #f59e0b;
+  --color-risk-medium: #fbbf24;
+  --color-risk-low: #10b981;
+}
+
+body {
+  background-color: var(--color-vortex-darker);
+  color: #f3f4f6;
+}
+
+/* Component styles */
+.card {
+  background-color: var(--color-vortex-dark);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  border: 1px solid #1f2937;
+  padding: 1.5rem;
+}
+
+.btn-primary {
+  background-color: var(--color-vortex-accent);
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: var(--color-vortex-accent-hover);
+}
+
+.btn-secondary {
+  background-color: #374151;
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  transition: background-color 0.2s;
+}
+
+.btn-secondary:hover {
+  background-color: #4b5563;
+}
+
+.badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-critical {
+  background-color: var(--color-risk-critical);
+  color: white;
+}
+
+.badge-high {
+  background-color: var(--color-risk-high);
+  color: white;
+}
+
+.badge-medium {
+  background-color: var(--color-risk-medium);
+  color: #111827;
+}
+
+.badge-low {
+  background-color: var(--color-risk-low);
+  color: white;
+}
+
+.input-field {
+  background-color: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  color: #f3f4f6;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-vortex-accent);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0e27;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4f46e5;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4338ca;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Pulse animations for critical alerts */
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+
+.pulse-red {
+  background-color: var(--color-risk-critical);
+  animation: pulse-glow 2s infinite;
+}
+
+@keyframes pulse-border {
+
+  0%,
+  100% {
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+
+  50% {
+    border-color: rgba(239, 68, 68, 1);
+  }
+}
+
+.pulse-border {
+  animation: pulse-border 2s infinite;
+}
+
+/* Custom scrollbar for alert feed */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #4f46e5;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #4338ca;
+}
