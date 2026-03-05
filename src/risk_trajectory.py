@@ -28,7 +28,7 @@ class RiskTrajectory:
     Detects escalation patterns and provides timeline data for visualization.
     """
     
-    def __init__(self, user_id: str, historical_events: pd.DataFrame, decay_half_life: int = 7):
+    def __init__(self, user_id: str, historical_events: pd.DataFrame, decay_half_life: int = 7, baseline_score: float = 0.0):
         """
         Initialize risk trajectory for a user.
         
@@ -36,9 +36,11 @@ class RiskTrajectory:
             user_id: User identifier
             historical_events: DataFrame of user's events (must have timestamp, anomaly_score)
             decay_half_life: Number of days for decay to reach 50% (default: 7 days)
+            baseline_score: User's normal anomaly score baseline (default: 0.0)
         """
         self.user_id = user_id
         self.decay_half_life = decay_half_life
+        self.baseline_score = baseline_score
         
         # Sort events by timestamp
         if 'timestamp' in historical_events.columns:
@@ -132,6 +134,43 @@ class RiskTrajectory:
         # Calculate cumulative risk (sum of weighted risks)
         self.cumulative_risk = float(self.events['weighted_risk'].sum())
         
+        # --- NEW: Leaky Bucket Accumulator Logic ---
+        # Instead of just summing weighted scores based on "now", we accumulate risk
+        # from the first event to the last, applying decay at each step.
+        self.events['accumulated_risk'] = 0.0
+        current_risk = 0.0
+        
+        if len(self.events) > 0:
+            # Sort explicitly by timestamp for accumulation
+            sorted_evts = self.events.sort_values('timestamp').copy()
+            
+            # Vectorized calculation of time differences (in days)
+            ts = sorted_evts['timestamp']
+            time_diffs = ts.diff().dt.total_seconds().fillna(0) / 86400
+            
+            # Vectorized calculation of hourly decay factors
+            # We can't easily vectorize the accumulation itself since each step depends 
+            # on the previous decayed value, but we can pre-calculate the pressure.
+            # IF scores are typically in [-0.5, 0.5] but were inverted in model_predict to [0, 1].
+            # Normal user baseline might be ~0.2. 
+            # Pressure is only added if score > baseline.
+            scores = sorted_evts['anomaly_score'].values
+            baseline = self.baseline_score
+            pressures = np.where(scores > baseline, scores - baseline, 0)
+            diffs = time_diffs.values
+            half_life = self.decay_half_life
+            
+            # The accumulation loop is still sequential but we minimize Python object overhead
+            acc_risks = np.zeros(len(sorted_evts))
+            curr = 0.0
+            for k in range(len(pressures)):
+                if k > 0:
+                    curr *= 0.5 ** (diffs[k] / half_life)
+                curr += pressures[k]
+                acc_risks[k] = curr
+            
+            self.events.loc[sorted_evts.index, 'accumulated_risk'] = acc_risks
+
         # Group by date for timeline
         self.events['date'] = self.events['timestamp'].dt.date
         
@@ -149,10 +188,8 @@ class RiskTrajectory:
             else:
                 high_risk = medium_risk = low_risk = 0
             
-            # Cumulative risk up to this date
-            cumulative_to_date = float(group['weighted_risk'].sum())
-            if np.isnan(cumulative_to_date):
-                cumulative_to_date = 0.0
+            # The "Cumulative Load" for the day is the peak accumulated risk on that day
+            day_acc_risk = float(group['accumulated_risk'].max())
                 
             # Average decay factor for this date
             avg_decay = float(group['decay_factor'].mean())
@@ -163,7 +200,7 @@ class RiskTrajectory:
                 'date': str(date),
                 'events': int(event_count),
                 'avg_risk': float(round(avg_risk, 4)),
-                'cumulative_risk': float(round(cumulative_to_date, 4)),
+                'cumulative_risk': float(round(day_acc_risk, 4)), # Rebranding this for the chart
                 'avg_decay_factor': float(round(avg_decay, 4)),
                 'high_risk_events': int(high_risk),
                 'medium_risk_events': int(medium_risk),
@@ -173,11 +210,9 @@ class RiskTrajectory:
         # Sort by date
         timeline.sort(key=lambda x: x['date'])
         
-        # Add running cumulative risk
-        running_cumulative = 0.0
+        # Standardize 'running_cumulative_risk' to the same leaky bucket values
         for entry in timeline:
-            running_cumulative += entry['cumulative_risk']
-            entry['running_cumulative_risk'] = round(running_cumulative, 4)
+            entry['running_cumulative_risk'] = entry['cumulative_risk']
         
         self.trajectory_data = timeline
         
@@ -411,16 +446,18 @@ class TrajectoryManager:
     Provides caching and bulk operations for trajectory analysis.
     """
     
-    def __init__(self, data_df: pd.DataFrame, decay_half_life: int = 7):
+    def __init__(self, data_df: pd.DataFrame, decay_half_life: int = 7, profile_manager=None):
         """
         Initialize trajectory manager.
         
         Args:
             data_df: DataFrame with all events for all users
             decay_half_life: Decay half-life in days
+            profile_manager: Optional UserProfileManager for baseline scores
         """
         self.data_df = data_df
         self.decay_half_life = decay_half_life
+        self.profile_manager = profile_manager
         self.trajectories = {}
         
         # Calculate trajectories for all users
@@ -437,10 +474,19 @@ class TrajectoryManager:
         print(f"Calculating risk trajectories for {len(unique_users)} users...")
         for user_id in unique_users:
             user_events = self.data_df[self.data_df['user_id'] == user_id].copy()
+            
+            # Get baseline score from profile manager if available
+            baseline_score = 0.0
+            if self.profile_manager:
+                profile = self.profile_manager.get_profile(user_id)
+                if profile:
+                    baseline_score = profile.baseline.get('baseline_score', 0.0)
+            
             self.trajectories[user_id] = RiskTrajectory(
                 user_id, 
                 user_events, 
-                decay_half_life=self.decay_half_life
+                decay_half_life=self.decay_half_life,
+                baseline_score=baseline_score
             )
         
         print(f"✅ Calculated {len(self.trajectories)} risk trajectories")
@@ -522,19 +568,20 @@ class TrajectoryManager:
 trajectory_manager: Optional[TrajectoryManager] = None
 
 
-def initialize_trajectory_manager(data_df: pd.DataFrame, decay_half_life: int = 7) -> TrajectoryManager:
+def initialize_trajectory_manager(data_df: pd.DataFrame, decay_half_life: int = 7, profile_manager=None) -> TrajectoryManager:
     """
     Initialize the global trajectory manager.
     
     Args:
         data_df: Full event dataset
         decay_half_life: Decay half-life in days
+        profile_manager: Optional UserProfileManager
         
     Returns:
         TrajectoryManager instance
     """
     global trajectory_manager
-    trajectory_manager = TrajectoryManager(data_df, decay_half_life)
+    trajectory_manager = TrajectoryManager(data_df, decay_half_life, profile_manager)
     return trajectory_manager
 
 

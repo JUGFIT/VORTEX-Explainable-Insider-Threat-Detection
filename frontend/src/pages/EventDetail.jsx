@@ -4,7 +4,7 @@ import Layout from '../components/Layout/Layout';
 import LoadingSpinner from '../components/Common/LoadingSpinner';
 import RiskBadge from '../components/Common/RiskBadge';
 import { ArrowLeft, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
-import { getExplanation, getRiskEvents } from '../services/api';
+import { getExplanation, getEventById } from '../services/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 const EventDetail = () => {
@@ -22,14 +22,13 @@ const EventDetail = () => {
         try {
             setLoading(true);
 
-            // Fetch explanation
-            const explData = await getExplanation(eventId);
+            // Fetch both in parallel — direct targeted lookup, no full-table scan
+            const [explData, eventData] = await Promise.all([
+                getExplanation(eventId),
+                getEventById(eventId),
+            ]);
             setExplanation(explData);
-
-            // Fetch event basic info
-            const events = await getRiskEvents({});
-            const event = events.find(e => e.event_id === eventId);
-            setEventInfo(event);
+            setEventInfo(eventData);
         } catch (error) {
             console.error('Error fetching event details:', error);
         } finally {

@@ -75,25 +75,23 @@ class UserProfile:
             return self._get_default_baseline()
         
         # Calculate baseline metrics
-        baseline = {
+        self.baseline = {
             # File access patterns
             'avg_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).mean()),
-            'std_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).std() or 0.0),
-            'max_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).max()),
+            '90th_files_accessed': float(normal_events.get('file_access_count', pd.Series([0])).quantile(0.9)),
             
             # Upload patterns
             'avg_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).mean()),
-            'std_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).std() or 0.0),
-            'max_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).max()),
+            '90th_upload_size': float(normal_events.get('upload_size_mb', pd.Series([0])).quantile(0.9)),
             
             # Temporal patterns
             'typical_hours': [int(h) for h in self._calculate_typical_hours(normal_events)],
             'typical_days': [int(d) for d in self._calculate_typical_days(normal_events)],
             'off_hours_frequency': float(self._calculate_off_hours_frequency(normal_events)),
             
-            # Risk baseline (mean of normal events)
-            'baseline_score': float(normal_events.get('anomaly_score', pd.Series([-0.1])).mean()),
-            'baseline_score_std': float(normal_events.get('anomaly_score', pd.Series([0])).std() or 0.0),
+            # Risk baseline (Robust 90th percentile of "stable" behavior)
+            'baseline_score': float(normal_events.get('anomaly_score', pd.Series([0.1])).quantile(0.9)),
+            'mean_anomaly_score': float(normal_events.get('anomaly_score', pd.Series([0.1])).mean()),
             
             # Activity level
             'events_per_day': float(len(normal_events) / max(
@@ -107,7 +105,7 @@ class UserProfile:
             'baseline_confidence': float(min(len(normal_events) / 90.0, 1.0))
         }
         
-        return baseline
+        return self.baseline
     
     def _get_default_baseline(self) -> Dict:
         """Return conservative default baseline when no historical data available."""
@@ -250,32 +248,23 @@ class UserProfile:
         return False
     
     def categorize_baseline_risk(self) -> str:
-        """
-        Categorize user's baseline risk level based on the frequency 
-        of high-intensity anomalous events.
-        
-        Returns:
-            'Low', 'Medium', or 'High'
-        """
+        """Categorize user risk based on density of high-anomaly events."""
         if 'anomaly_score' not in self.historical_events.columns or len(self.historical_events) == 0:
             return 'Low'
             
-        # Event-based risk counting
-        # Critical events: Very high anomaly scores (> 0.15)
-        critical_event_count = len(self.historical_events[self.historical_events['anomaly_score'] >= 0.15])
+        # Instead of hardcoded scores, use the distribution
+        score_data = self.historical_events['anomaly_score']
         
-        # High risk events: Significant anomaly scores (> 0.10)
-        high_risk_event_count = len(self.historical_events[self.historical_events['anomaly_score'] >= 0.10])
+        # High intensity events (exceeding organizational quantiles)
+        # Using 0.4 and 0.25 as new, stricter thresholds discovered in scaling phase
+        critical_count = len(score_data[score_data >= 0.4])
+        high_risk_count = len(score_data[score_data >= 0.25])
         
-        # Elevated thresholds since dataset generation created more noise than expected
-        # Require 30 critical events or 80 high-risk events to be High Risk
-        if critical_event_count >= 30 or high_risk_event_count >= 80:
+        # User is high risk if they have frequent extreme spikes
+        if critical_count >= 15 or high_risk_count >= 50:
             return 'High'
-            
-        # Require 20 critical events or 60 high-risk events to be Medium Risk
-        if critical_event_count >= 20 or high_risk_event_count >= 60:
+        if critical_count >= 5 or high_risk_count >= 20:
             return 'Medium'
-            
         return 'Low'
     
     def calculate_divergence(self, new_event: pd.Series) -> Dict:

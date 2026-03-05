@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout/Layout';
 import LoadingSpinner from '../components/Common/LoadingSpinner';
 import RiskBadge from '../components/Common/RiskBadge';
-import { Search, Eye, TrendingUp, Users as UsersIcon, ShieldAlert } from 'lucide-react';
+import { Search, Eye, TrendingUp, Users as UsersIcon, ShieldAlert, ArrowUp, ArrowDown } from 'lucide-react';
 import { getAllUsers } from '../services/api';
 
 const Users = () => {
@@ -13,6 +13,8 @@ const Users = () => {
     const [filteredUsers, setFilteredUsers] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortBy, setSortBy] = useState('risk');
+    const [riskFilter, setRiskFilter] = useState('all');
+    const [sortOrder, setSortOrder] = useState('desc'); // 'asc' or 'desc'
 
     useEffect(() => {
         fetchUsers();
@@ -21,31 +23,47 @@ const Users = () => {
     useEffect(() => {
         let filtered = [...users];
 
+        // Search filter
         if (searchTerm) {
             filtered = filtered.filter(user =>
                 user.user_id.toLowerCase().includes(searchTerm.toLowerCase())
             );
         }
 
+        // Risk level filter
+        if (riskFilter !== 'all') {
+            filtered = filtered.filter(user =>
+                (user.baseline_risk_level || 'LOW').toLowerCase() === riskFilter.toLowerCase()
+            );
+        }
+
         // Apply Sorting
         filtered.sort((a, b) => {
+            let comparison = 0;
             if (sortBy === 'risk') {
                 const riskOrder = { 'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3 };
                 const riskA = riskOrder[(a.baseline_risk_level || 'LOW').toUpperCase()] ?? 4;
                 const riskB = riskOrder[(b.baseline_risk_level || 'LOW').toUpperCase()] ?? 4;
 
-                if (riskA !== riskB) return riskA - riskB;
-                // If same level, use score as secondary sort
-                return (b.baseline_score || 0) - (a.baseline_score || 0);
+                if (riskA !== riskB) {
+                    comparison = riskA - riskB;
+                } else {
+                    // Secondary sort by score
+                    comparison = (b.baseline_score || 0) - (a.baseline_score || 0);
+                }
+            } else if (sortBy === 'confidence') {
+                comparison = (b.confidence || 0) - (a.confidence || 0);
+            } else if (sortBy === 'events') {
+                comparison = (b.event_count || 0) - (a.event_count || 0);
+            } else if (sortBy === 'id') {
+                comparison = a.user_id.localeCompare(b.user_id);
             }
-            if (sortBy === 'confidence') return (b.confidence || 0) - (a.confidence || 0);
-            if (sortBy === 'events') return (b.event_count || 0) - (a.event_count || 0);
-            if (sortBy === 'id') return a.user_id.localeCompare(b.user_id);
-            return 0;
+
+            return sortOrder === 'desc' ? comparison : -comparison;
         });
 
         setFilteredUsers(filtered);
-    }, [users, searchTerm, sortBy]);
+    }, [users, searchTerm, sortBy, riskFilter, sortOrder]);
 
     const fetchUsers = async () => {
         try {
@@ -72,54 +90,61 @@ const Users = () => {
 
     return (
         <Layout title="User Behavioral Directory">
-            {/* Top Stats & Search */}
             {/* Top Stats & Search Bar Area */}
             <div className="flex flex-wrap lg:flex-nowrap gap-4 mb-8">
-                {/* Search Bar - Main Focus */}
-                <div className="flex-grow lg:w-1/2 card bg-gray-900 border-gray-800 flex items-center px-6 py-2 shadow-xl transition-all focus-within:border-vortex-accent/50 focus-within:ring-1 focus-within:ring-vortex-accent/20">
-                    <Search size={18} className="text-vortex-accent mr-4" />
+                {/* Search Bar */}
+                <div className="flex-grow lg:w-1/3 card bg-gray-900 border-gray-800 flex items-center px-4 py-2 shadow-xl focus-within:border-vortex-accent/50 transition-all">
+                    <Search size={18} className="text-vortex-accent mr-3" />
                     <input
                         type="text"
-                        placeholder="Search organizational identity (e.g. user_025)..."
+                        placeholder="Search organizational identity..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="bg-transparent border-none focus:ring-0 text-sm w-full placeholder:text-gray-600"
                     />
-                    <div className="hidden sm:flex items-center gap-2 ml-4 px-2 py-0.5 bg-gray-800 rounded-full border border-gray-700">
-                        <UsersIcon size={10} className="text-gray-400" />
-                        <span className="text-2xs font-bold whitespace-nowrap text-gray-300">{filteredUsers.length}</span>
-                    </div>
                 </div>
 
-                {/* Filter/Sort Section - Secondary Container */}
-                <div className="w-full lg:w-60 card bg-gray-900 border-gray-800 flex items-center px-4 py-2 shadow-xl">
-                    <div className="flex items-center gap-3 w-full">
-                        <span className="text-2xs text-gray-500 font-bold uppercase tracking-wider">Sort:</span>
-                        <select
-                            value={sortBy}
-                            onChange={(e) => setSortBy(e.target.value)}
-                            className="input-field py-1 px-8 text-xs w-full"
-                        >
-                            <option value="risk">Highest Risk</option>
-                            <option value="confidence">Confidence Score</option>
-                            <option value="events">Activity Volume</option>
-                            <option value="id">Alphabetical ID</option>
-                        </select>
-                    </div>
+                {/* Risk Filter */}
+                <div className="w-full lg:w-48 card bg-gray-900 border-gray-800 flex items-center px-3 py-2 shadow-xl">
+                    <select
+                        value={riskFilter}
+                        onChange={(e) => setRiskFilter(e.target.value)}
+                        className="bg-transparent border-none text-xs text-gray-300 w-full focus:ring-0 cursor-pointer"
+                    >
+                        <option value="all">All Risk Levels</option>
+                        <option value="critical">Critical Only</option>
+                        <option value="high">High Risk</option>
+                        <option value="medium">Medium Risk</option>
+                        <option value="low">Low Risk</option>
+                    </select>
                 </div>
 
-                {/* High Risk Highlight - Outcome Card */}
-                <div className="w-full lg:w-60 card bg-vortex-accent/10 border-vortex-accent/30 flex items-center justify-between px-6 py-2 shadow-lg">
-                    <div className="flex items-center gap-3">
-                        <ShieldAlert size={18} className="text-vortex-accent" />
-                        <div className="text-2xs text-vortex-accent font-black uppercase tracking-widest">Risk Vectors</div>
-                    </div>
-                    <div className="text-xl font-black text-white leading-none">
-                        {users.filter(u => {
-                            const level = u.baseline_risk_level?.toUpperCase();
-                            return level === 'HIGH' || level === 'CRITICAL';
-                        }).length}
-                    </div>
+                {/* Sort Section */}
+                <div className="w-full lg:w-64 card bg-gray-900 border-gray-800 flex items-center px-3 py-2 shadow-xl gap-2">
+                    <span className="text-[10px] text-gray-500 font-bold uppercase shrink-0">Sort:</span>
+                    <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="bg-transparent border-none text-xs text-gray-300 flex-grow focus:ring-0 cursor-pointer p-0"
+                    >
+                        <option value="risk">Impact Risk</option>
+                        <option value="confidence">Data Confidence</option>
+                        <option value="events">Activity Volume</option>
+                        <option value="id">Identity ID</option>
+                    </select>
+                    <button
+                        onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                        className="p-1 px-2 hover:bg-gray-800 rounded-md text-vortex-accent transition-colors"
+                        title={sortOrder === 'desc' ? 'Descending' : 'Ascending'}
+                    >
+                        {sortOrder === 'desc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
+                    </button>
+                </div>
+
+                {/* Counter */}
+                <div className="hidden lg:flex card bg-vortex-accent/10 border-vortex-accent/30 items-center justify-between px-6 py-2 shadow-lg min-w-[140px]">
+                    <div className="text-[10px] text-vortex-accent font-black uppercase tracking-widest mr-4">Total</div>
+                    <div className="text-xl font-black text-white leading-none">{filteredUsers.length}</div>
                 </div>
             </div>
 
