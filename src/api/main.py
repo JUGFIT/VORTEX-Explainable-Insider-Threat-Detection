@@ -38,7 +38,7 @@ from src.xai_explainer import xai_pipeline, load_data_and_model
 from src.data_generator import generate_synthetic_logs
 from src.feature_engineer import feature_engineering_pipeline
 from src.model_train import model_training_pipeline, MODEL_FEATURES
-from src.user_profile import UserProfile, UserProfileManager, initialize_profile_manager, get_profile_manager
+from src.user_profile import UserProfile, UserProfileManager, GlobalOrgBaseline, initialize_profile_manager, get_profile_manager
 from src.risk_trajectory import RiskTrajectory, TrajectoryManager, initialize_trajectory_manager, get_trajectory_manager
 from src.event_chains import EventChainDetector, ChainDetectorManager, initialize_chain_detector, get_chain_detector_manager
 from src.temporal_patterns import TemporalPatternDetector, TemporalManager, initialize_temporal_manager, get_temporal_manager
@@ -199,6 +199,7 @@ class UserBaseline(BaseModel):
     baseline_risk_level: str
     is_baseline_elevated: bool
     data_quality: Dict[str, Any]
+    global_context: Optional[Dict[str, Any]] = None
 
 class DivergenceAnalysis(BaseModel):
     """Divergence analysis for an event compared to user's baseline."""
@@ -373,6 +374,25 @@ class DataStore:
             self.df = load_processed_data()
             self.model = load_model()
             self.last_loaded = datetime.now()
+
+            # Auto-retrain model if missing but data is available
+            if self.model is None and self.df is not None:
+                logger.warning("⚠️ Model not found — auto-retraining from in-memory data...")
+                try:
+                    from sklearn.ensemble import IsolationForest
+                    import joblib as _joblib
+                    _X = self.df[MODEL_FEATURES].fillna(0)
+                    _model = IsolationForest(
+                        contamination=0.05, random_state=42, n_estimators=100, n_jobs=-1
+                    )
+                    _model.fit(_X)
+                    os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
+                    _joblib.dump(_model, MODEL_FILE)
+                    self.model = _model
+                    logger.info("✅ Model auto-retrained and saved successfully")
+                except Exception as retrain_err:
+                    logger.error(f"❌ Auto-retrain failed: {retrain_err}")
+
             
             # Phase 2A: Initialize user profiles
             if self.df is not None:
@@ -899,15 +919,37 @@ def get_user_baseline(user_id: str):
     
     try:
         profile = data_store.profile_manager.get_profile(user_id)
-        
+
         if profile is None:
             raise HTTPException(status_code=404, detail=f"User {user_id} not found")
-        
+
         return UserBaseline(**profile.to_dict())
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting baseline for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/global-baseline", summary="Get Org-Wide Global Baseline")
+def get_global_baseline():
+    """
+    Returns the organisation-wide baseline statistics computed across all users.
+
+    Includes mean/std/percentiles of anomaly scores and per-behaviour averages
+    (off-hours rate, sensitive file access rate, etc.) for the whole organisation.
+    Use this to contextualise individual user risk.
+    """
+    if not data_store.is_loaded():
+        raise HTTPException(status_code=503, detail="Service data not loaded")
+    if data_store.profile_manager is None:
+        raise HTTPException(status_code=503, detail="User profiles not initialised")
+
+    try:
+        gb = data_store.profile_manager.global_baseline
+        return gb.to_dict()
+    except Exception as e:
+        logger.error(f"Error fetching global baseline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1504,6 +1546,12 @@ def get_explanation(event_id: str):
     """
     if not data_store.is_loaded():
         raise HTTPException(status_code=503, detail="Service data not loaded")
+
+    if not data_store.is_model_loaded():
+        raise HTTPException(
+            status_code=503,
+            detail="Model not loaded. SHAP explanations are unavailable. The model may be retraining — please try again in a few minutes."
+        )
     
     try:
         explanation_result = xai_pipeline(
@@ -1515,11 +1563,13 @@ def get_explanation(event_id: str):
         if explanation_result is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Event ID {event_id} not found or explanation generation failed"
+                detail=f"Event ID '{event_id}' not found in dataset"
             )
         
         return explanation_result
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Explanation error: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error generating explanation: {str(e)}")

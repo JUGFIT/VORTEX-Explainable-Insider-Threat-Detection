@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout/Layout';
 import LoadingSpinner from '../components/Common/LoadingSpinner';
 import RiskBadge from '../components/Common/RiskBadge';
-import { ArrowLeft, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { getExplanation, getEventById } from '../services/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
@@ -12,6 +12,7 @@ const EventDetail = () => {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(true);
     const [explanation, setExplanation] = useState(null);
+    const [explanationError, setExplanationError] = useState(null);
     const [eventInfo, setEventInfo] = useState(null);
 
     useEffect(() => {
@@ -21,16 +22,25 @@ const EventDetail = () => {
     const fetchEventDetails = async () => {
         try {
             setLoading(true);
+            setExplanationError(null);
 
-            // Fetch both in parallel — direct targeted lookup, no full-table scan
-            const [explData, eventData] = await Promise.all([
-                getExplanation(eventId),
-                getEventById(eventId),
-            ]);
-            setExplanation(explData);
+            // Fetch event info first — this is always required
+            const eventData = await getEventById(eventId);
             setEventInfo(eventData);
+
+            // SHAP explanation is optional — if it fails, show event info anyway
+            try {
+                const explData = await getExplanation(eventId);
+                setExplanation(explData);
+            } catch (explErr) {
+                const msg = explErr?.response?.data?.detail || 'SHAP explanation unavailable.';
+                setExplanationError(msg);
+                console.warn('Explanation unavailable:', msg);
+            }
         } catch (error) {
             console.error('Error fetching event details:', error);
+            // eventInfo couldn't load — show the "not found" fallback below
+            setEventInfo(null);
         } finally {
             setLoading(false);
         }
@@ -44,7 +54,7 @@ const EventDetail = () => {
         );
     }
 
-    if (!explanation || !eventInfo) {
+    if (!eventInfo) {
         return (
             <Layout title="Event Details" subtitle="Event not found">
                 <div className="card">
@@ -57,15 +67,17 @@ const EventDetail = () => {
         );
     }
 
-    // Prepare chart data
-    const chartData = explanation.explanation
-        .sort((a, b) => Math.abs(b.shap_contribution) - Math.abs(a.shap_contribution))
-        .slice(0, 10)
-        .map(item => ({
-            feature: item.feature.replace(/_/g, ' ').replace(/zscore/g, ''),
-            value: item.shap_contribution,
-            isHighRisk: item.is_high_risk_contributor,
-        }));
+    // Prepare chart data (only when explanation is available)
+    const chartData = explanation
+        ? explanation.explanation
+            .sort((a, b) => Math.abs(b.shap_contribution) - Math.abs(a.shap_contribution))
+            .slice(0, 10)
+            .map(item => ({
+                feature: item.feature.replace(/_/g, ' ').replace(/zscore/g, ''),
+                value: item.shap_contribution,
+                isHighRisk: item.is_high_risk_contributor,
+            }))
+        : [];
 
     // Lightweight markdown → JSX renderer helpers
     // Handles: **bold**, *italic*
@@ -197,8 +209,25 @@ const EventDetail = () => {
                 </div>
             </div>
 
+            {/* Explanation Unavailable Notice */}
+            {explanationError && (
+                <div className="card mb-6 border-l-4 border-yellow-500">
+                    <div className="flex items-start space-x-3">
+                        <Clock size={22} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                        <div>
+                            <h3 className="text-base font-semibold text-yellow-300 mb-1">SHAP Analysis Unavailable</h3>
+                            <p className="text-gray-400 text-sm">
+                                {explanationError.includes('retraining')
+                                    ? 'The AI model is currently being retrained. SHAP explanations will be available shortly — please refresh the page in a few minutes.'
+                                    : 'The SHAP explanation could not be loaded. The event summary above is still accurate.'}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Threat Narrative */}
-            {explanation.narrative && (
+            {explanation && explanation.narrative && (
                 <div className="card mb-6 border-l-4 border-risk-critical">
                     <div className="flex items-start space-x-3 mb-3">
                         <AlertTriangle size={24} className="text-risk-critical flex-shrink-0 mt-1" />
@@ -213,85 +242,89 @@ const EventDetail = () => {
             )}
 
             {/* SHAP Feature Contributions */}
-            <div className="card mb-6">
-                <h3 className="text-lg font-semibold mb-4">Feature Contributions (SHAP Analysis)</h3>
-                <p className="text-sm text-gray-400 mb-4">
-                    Base value: <span className="font-mono">{explanation.base_value.toFixed(4)}</span>
-                </p>
+            {explanation && (
+                <div className="card mb-6">
+                    <h3 className="text-lg font-semibold mb-4">Feature Contributions (SHAP Analysis)</h3>
+                    <p className="text-sm text-gray-400 mb-4">
+                        Base value: <span className="font-mono">{explanation.base_value.toFixed(4)}</span>
+                    </p>
 
-                <ResponsiveContainer width="100%" height={400}>
-                    <BarChart data={chartData} layout="vertical">
-                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                        <XAxis type="number" stroke="#9ca3af" />
-                        <YAxis
-                            dataKey="feature"
-                            type="category"
-                            width={150}
-                            stroke="#9ca3af"
-                            style={{ fontSize: '12px' }}
-                        />
-                        <Tooltip
-                            contentStyle={{ backgroundColor: '#1f2937', border: 'none' }}
-                            formatter={(value) => value.toFixed(4)}
-                        />
-                        <Bar dataKey="value">
-                            {chartData.map((entry, index) => (
-                                <Cell
-                                    key={`cell-${index}`}
-                                    fill={entry.value > 0 ? '#ef4444' : '#10b981'}
-                                />
-                            ))}
-                        </Bar>
-                    </BarChart>
-                </ResponsiveContainer>
-            </div>
+                    <ResponsiveContainer width="100%" height={400}>
+                        <BarChart data={chartData} layout="vertical">
+                            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                            <XAxis type="number" stroke="#9ca3af" />
+                            <YAxis
+                                dataKey="feature"
+                                type="category"
+                                width={150}
+                                stroke="#9ca3af"
+                                style={{ fontSize: '12px' }}
+                            />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#1f2937', border: 'none' }}
+                                formatter={(value) => value.toFixed(4)}
+                            />
+                            <Bar dataKey="value">
+                                {chartData.map((entry, index) => (
+                                    <Cell
+                                        key={`cell-${index}`}
+                                        fill={entry.value > 0 ? '#ef4444' : '#10b981'}
+                                    />
+                                ))}
+                            </Bar>
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
 
             {/* Detailed Feature Table */}
-            <div className="card mb-6">
-                <h3 className="text-lg font-semibold mb-4">Detailed Feature Analysis</h3>
-                <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead>
-                            <tr className="border-b border-gray-800">
-                                <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Feature</th>
-                                <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Value at Risk</th>
-                                <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">SHAP Contribution</th>
-                                <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Impact</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {explanation.explanation
-                                .sort((a, b) => Math.abs(b.shap_contribution) - Math.abs(a.shap_contribution))
-                                .map((feature, idx) => (
-                                    <tr key={idx} className="border-b border-gray-800">
-                                        <td className="py-3 px-4 text-sm">
-                                            {feature.feature.replace(/_/g, ' ')}
-                                        </td>
-                                        <td className="py-3 px-4 text-sm font-mono">
-                                            {feature.value_at_risk.toFixed(4)}
-                                        </td>
-                                        <td className="py-3 px-4 text-sm font-mono">
-                                            <span className={feature.shap_contribution > 0 ? 'text-risk-critical' : 'text-risk-low'}>
-                                                {feature.shap_contribution > 0 ? '+' : ''}
-                                                {feature.shap_contribution.toFixed(4)}
-                                            </span>
-                                        </td>
-                                        <td className="py-3 px-4">
-                                            {feature.is_high_risk_contributor ? (
-                                                <span className="badge badge-high">High Risk</span>
-                                            ) : (
-                                                <span className="badge bg-gray-700 text-gray-300">Low Impact</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                        </tbody>
-                    </table>
+            {explanation && (
+                <div className="card mb-6">
+                    <h3 className="text-lg font-semibold mb-4">Detailed Feature Analysis</h3>
+                    <div className="overflow-x-auto">
+                        <table className="w-full">
+                            <thead>
+                                <tr className="border-b border-gray-800">
+                                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Feature</th>
+                                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Value at Risk</th>
+                                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">SHAP Contribution</th>
+                                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Impact</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {explanation.explanation
+                                    .sort((a, b) => Math.abs(b.shap_contribution) - Math.abs(a.shap_contribution))
+                                    .map((feature, idx) => (
+                                        <tr key={idx} className="border-b border-gray-800">
+                                            <td className="py-3 px-4 text-sm">
+                                                {feature.feature.replace(/_/g, ' ')}
+                                            </td>
+                                            <td className="py-3 px-4 text-sm font-mono">
+                                                {feature.value_at_risk.toFixed(4)}
+                                            </td>
+                                            <td className="py-3 px-4 text-sm font-mono">
+                                                <span className={feature.shap_contribution > 0 ? 'text-risk-critical' : 'text-risk-low'}>
+                                                    {feature.shap_contribution > 0 ? '+' : ''}
+                                                    {feature.shap_contribution.toFixed(4)}
+                                                </span>
+                                            </td>
+                                            <td className="py-3 px-4">
+                                                {feature.is_high_risk_contributor ? (
+                                                    <span className="badge badge-high">High Risk</span>
+                                                ) : (
+                                                    <span className="badge bg-gray-700 text-gray-300">Low Impact</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Mitigation Suggestions */}
-            {explanation.mitigation_suggestions && explanation.mitigation_suggestions.length > 0 && (
+            {explanation && explanation.mitigation_suggestions && explanation.mitigation_suggestions.length > 0 && (
                 <div className="card border-l-4 border-blue-500">
                     <h3 className="text-lg font-semibold mb-4">Recommended Mitigation Actions</h3>
                     <ol className="space-y-3">

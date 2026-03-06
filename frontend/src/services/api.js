@@ -56,6 +56,11 @@ export const getUserBaseline = async (userId) => {
     return response.data;
 };
 
+export const getGlobalBaseline = async () => {
+    const response = await api.get('/global-baseline');
+    return response.data;
+};
+
 export const getEventDivergence = async (eventId) => {
     const response = await api.get(`/baselines/divergence/${eventId}`);
     return response.data;
